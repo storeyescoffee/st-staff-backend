@@ -8,10 +8,14 @@ import io.storeyes.accesscontrol.employees.repositories.EmployeeRepository;
 import io.storeyes.accesscontrol.employees.entities.Credential;
 import io.storeyes.accesscontrol.logs.dto.EmployeeLogResponse;
 import io.storeyes.accesscontrol.logs.dto.EmployeeUpsert;
+import io.storeyes.accesscontrol.logs.dto.NotificationBatch;
 import io.storeyes.accesscontrol.logs.dto.PunchEntry;
+import io.storeyes.accesscontrol.logs.dto.PunchResponse;
 import io.storeyes.accesscontrol.logs.entities.EmployeeLog;
 import io.storeyes.accesscontrol.logs.entities.LogStatus;
 import io.storeyes.accesscontrol.logs.repositories.EmployeeLogRepository;
+import io.storeyes.accesscontrol.notificationrules.dto.NotificationRuleResponse;
+import io.storeyes.accesscontrol.notificationrules.services.NotificationRuleService;
 import io.storeyes.accesscontrol.schedules.entities.Schedule;
 import io.storeyes.accesscontrol.schedules.entities.ScheduleDetail;
 import io.storeyes.accesscontrol.schedules.repositories.ScheduleDetailRepository;
@@ -38,11 +42,15 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class EmployeeLogService {
 
+    private static final LocalTime DND_START = LocalTime.of(23, 0);
+    private static final LocalTime DND_END = LocalTime.of(6, 30);
+
     private final EmployeeLogRepository employeeLogRepository;
     private final EmployeeRepository employeeRepository;
     private final ScheduleRepository scheduleRepository;
     private final ScheduleDetailRepository scheduleDetailRepository;
     private final AnomalyRepository anomalyRepository;
+    private final NotificationRuleService notificationRuleService;
 
     @Transactional(readOnly = true)
     public List<EmployeeLogResponse> getLogsForDate(LocalDate date) {
@@ -67,7 +75,7 @@ public class EmployeeLogService {
     }
 
     @Transactional
-    public List<EmployeeLogResponse> processPunches(
+    public PunchResponse processPunches(
             LocalDate date, LocalTime time, List<EmployeeUpsert> employees, List<PunchEntry> punches) {
         upsertEmployees(employees);
 
@@ -148,7 +156,49 @@ public class EmployeeLogService {
             results.add(EmployeeLogResponse.from(saved));
         }
 
-        return results;
+        return new PunchResponse(results, buildNotifications(time, results));
+    }
+
+    /**
+     * Turn the changed logs into notification instructions, honoring the tenant's rules:
+     * late/absence gate which statuses qualify, dnd suppresses (to defer) during the night
+     * window, and group signals one summary instead of one notification per employee.
+     */
+    private NotificationBatch buildNotifications(LocalTime checkTime, List<EmployeeLogResponse> results) {
+        Map<String, Boolean> rules = notificationRuleService.findAll().stream()
+                .collect(Collectors.toMap(NotificationRuleResponse::id, NotificationRuleResponse::enabled));
+        boolean lateOn = rules.getOrDefault("late", false);
+        boolean absenceOn = rules.getOrDefault("absence", false);
+        boolean grouped = rules.getOrDefault("group", false);
+        boolean dndOn = rules.getOrDefault("dnd", false);
+
+        List<NotificationBatch.Item> items = results.stream()
+                .filter(r -> (r.status() == LogStatus.LATE && lateOn)
+                        || (r.status() == LogStatus.ABSENT && absenceOn))
+                .map(r -> new NotificationBatch.Item(
+                        r.employee().code(), r.employee().name(), r.status()))
+                .toList();
+
+        int lateCount = (int) items.stream().filter(i -> i.status() == LogStatus.LATE).count();
+        int absenceCount = (int) items.stream().filter(i -> i.status() == LogStatus.ABSENT).count();
+
+        boolean dndSuppressed = dndOn && !items.isEmpty() && inDndWindow(checkTime);
+        boolean send = !items.isEmpty() && !dndSuppressed;
+
+        return new NotificationBatch(send, dndSuppressed, grouped, lateCount, absenceCount,
+                buildSummary(lateCount, absenceCount), items);
+    }
+
+    /** DND window spans midnight: [23:00, 24:00) ∪ [00:00, 06:30]. */
+    private boolean inDndWindow(LocalTime t) {
+        return !t.isBefore(DND_START) || !t.isAfter(DND_END);
+    }
+
+    private String buildSummary(int lateCount, int absenceCount) {
+        List<String> parts = new ArrayList<>();
+        if (lateCount > 0) parts.add(lateCount + " late");
+        if (absenceCount > 0) parts.add(absenceCount + " absent");
+        return String.join(" · ", parts);
     }
 
     /** Create any employee whose code is not yet known. Existing codes are left untouched. */

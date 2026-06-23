@@ -2,6 +2,7 @@ package io.storeyes.accesscontrol.logs.controllers;
 
 import io.storeyes.accesscontrol.logs.dto.EmployeeLogResponse;
 import io.storeyes.accesscontrol.logs.dto.PunchBatchRequest;
+import io.storeyes.accesscontrol.logs.dto.PunchResponse;
 import io.storeyes.accesscontrol.logs.services.EmployeeLogService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.format.annotation.DateTimeFormat;
@@ -30,7 +31,7 @@ public class EmployeeLogController {
     }
 
     @PostMapping("/punch")
-    public List<EmployeeLogResponse> punch(@RequestBody PunchBatchRequest body) {
+    public PunchResponse punch(@RequestBody PunchBatchRequest body) {
         LocalDate date = body.timestamp().toLocalDate();
         return employeeLogService.processPunches(
                 date, body.timestamp().toLocalTime(), body.employees(), body.punches());
