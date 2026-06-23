@@ -1,0 +1,1 @@
+ALTER TABLE work_modes ADD COLUMN color VARCHAR(32);

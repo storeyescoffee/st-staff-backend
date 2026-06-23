@@ -1,0 +1,1 @@
+ALTER TABLE employee_logs ADD COLUMN IF NOT EXISTS duration INTEGER;

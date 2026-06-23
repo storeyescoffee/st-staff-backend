@@ -1,0 +1,27 @@
+spring:
+  application:
+    name: accesscontrol
+  datasource:
+    url: jdbc:postgresql://${POSTGRES_HOST:localhost}:5432/${POSTGRES_DB:storeyes-blue}?sslmode=verify-full&sslrootcert=${POSTGRES_SSL_ROOT_CERT:./global-bundle.pem}
+    username: ${POSTGRES_USER:storeyes}
+    password: ${POSTGRES_PASSWORD:}
+    driver-class-name: org.postgresql.Driver
+  jpa:
+    hibernate:
+      ddl-auto: none
+    properties:
+      hibernate:
+        format_sql: true
+        default_schema: demo
+    open-in-view: false
+    show-sql: false
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: true
+    repair-on-migrate: true
+    schemas: demo
+    default-schema: demo
+
+server:
+  port: ${SERVER_PORT:8080}

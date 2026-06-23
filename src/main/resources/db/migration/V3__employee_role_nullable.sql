@@ -1,0 +1,1 @@
+ALTER TABLE employees ALTER COLUMN role_id DROP NOT NULL;
