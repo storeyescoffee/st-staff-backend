@@ -14,7 +14,9 @@ import org.springframework.web.bind.annotation.RestController;
 import java.util.List;
 
 @RestController
-@RequestMapping("/api/notification-rules")
+// Served directly at /api/staff/notification-rules, and also at /api/notification-rules
+// for environments whose gateway rewrites /api/staff/* -> /api/* (like the other controllers).
+@RequestMapping({"/api/staff/notification-rules", "/api/notification-rules"})
 @RequiredArgsConstructor
 public class NotificationRuleController {
 
