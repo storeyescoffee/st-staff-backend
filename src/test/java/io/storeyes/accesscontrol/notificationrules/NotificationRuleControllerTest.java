@@ -24,7 +24,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 /**
  * Standalone MockMvc test (no Spring context / DB) verifying the controller routes
- * resolve at both the /api/staff/... and /api/... prefixes and return the expected JSON.
+ * resolve at /api/notification-rules (the main backend proxies /api/staff/* here) and
+ * return the expected JSON.
  */
 class NotificationRuleControllerTest {
 
@@ -47,10 +48,10 @@ class NotificationRuleControllerTest {
     }
 
     @Test
-    void getReturnsAllRules_atStaffPrefix() throws Exception {
+    void getReturnsAllRules() throws Exception {
         when(service.findAll()).thenReturn(sampleRules());
 
-        mockMvc.perform(get("/api/staff/notification-rules"))
+        mockMvc.perform(get("/api/notification-rules"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.length()").value(4))
                 .andExpect(jsonPath("$[0].id").value("late"))
@@ -60,20 +61,11 @@ class NotificationRuleControllerTest {
     }
 
     @Test
-    void getReturnsAllRules_atBarePrefix() throws Exception {
-        when(service.findAll()).thenReturn(sampleRules());
-
-        mockMvc.perform(get("/api/notification-rules"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.length()").value(4));
-    }
-
-    @Test
-    void putTogglesRule_atStaffPrefix() throws Exception {
+    void putTogglesRule() throws Exception {
         when(service.setEnabled(eq("group"), any(NotificationRuleRequest.class)))
                 .thenReturn(sampleRules());
 
-        mockMvc.perform(put("/api/staff/notification-rules/group")
+        mockMvc.perform(put("/api/notification-rules/group")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"enabled\":true}"))
                 .andExpect(status().isOk())
