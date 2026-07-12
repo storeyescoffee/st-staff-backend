@@ -10,7 +10,9 @@ import io.storeyes.accesscontrol.logs.dto.EmployeeLogResponse;
 import io.storeyes.accesscontrol.logs.dto.EmployeeUpsert;
 import io.storeyes.accesscontrol.logs.dto.NotificationBatch;
 import io.storeyes.accesscontrol.logs.dto.PunchEntry;
+import io.storeyes.accesscontrol.logs.dto.PunchMethod;
 import io.storeyes.accesscontrol.logs.dto.PunchResponse;
+import io.storeyes.accesscontrol.logs.dto.PunchTarget;
 import io.storeyes.accesscontrol.logs.entities.EmployeeLog;
 import io.storeyes.accesscontrol.logs.entities.LogStatus;
 import io.storeyes.accesscontrol.logs.repositories.EmployeeLogRepository;
@@ -21,11 +23,11 @@ import io.storeyes.accesscontrol.schedules.entities.ScheduleDetail;
 import io.storeyes.accesscontrol.schedules.repositories.ScheduleDetailRepository;
 import io.storeyes.accesscontrol.schedules.repositories.ScheduleRepository;
 import io.storeyes.accesscontrol.workmodes.entities.WorkMode;
+import io.storeyes.accesscontrol.workmodes.exceptions.WorkModeNotFoundException;
+import io.storeyes.accesscontrol.workmodes.repositories.WorkModeRepository;
 import lombok.RequiredArgsConstructor;
-import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.web.server.ResponseStatusException;
 
 import java.time.LocalDate;
 import java.time.LocalTime;
@@ -51,6 +53,7 @@ public class EmployeeLogService {
     private final ScheduleDetailRepository scheduleDetailRepository;
     private final AnomalyRepository anomalyRepository;
     private final NotificationRuleService notificationRuleService;
+    private final WorkModeRepository workModeRepository;
 
     @Transactional(readOnly = true)
     public List<EmployeeLogResponse> getLogsForDate(LocalDate date) {
@@ -76,6 +79,138 @@ public class EmployeeLogService {
 
     @Transactional
     public PunchResponse processPunches(
+            LocalDate date,
+            LocalTime time,
+            PunchTarget target,
+            List<EmployeeUpsert> employees,
+            List<PunchEntry> punches) {
+        if (target != null && target.shiftId() != null && target.method() != null) {
+            return processTargetedPunches(date, time, target, employees, punches);
+        }
+        return processAllPunches(date, time, employees, punches);
+    }
+
+    /**
+     * Batch scoped to one shift and one direction.
+     *
+     * <p>Only employees scheduled on {@code target.shiftId} for this date are considered; punches for
+     * anyone else are ignored. {@code IN} decides PRESENT / LATE / ABSENT, {@code OUT} decides
+     * MISSED_OUT — neither direction writes the other's statuses.
+     */
+    private PunchResponse processTargetedPunches(
+            LocalDate date,
+            LocalTime time,
+            PunchTarget target,
+            List<EmployeeUpsert> employees,
+            List<PunchEntry> punches) {
+        upsertEmployees(employees);
+
+        WorkMode shift = workModeRepository.findById(target.shiftId())
+                .orElseThrow(() -> new WorkModeNotFoundException(target.shiftId()));
+
+        // Employees whose schedule for this date puts them on the targeted shift. Anyone else — including
+        // codes that arrived in the punch list — is outside this check and is left untouched.
+        Map<UUID, WorkMode> workModeByEmployee = resolveScheduledWorkModes(date);
+        Map<UUID, Employee> shiftEmployees = employeeRepository.findAll().stream()
+                .filter(emp -> {
+                    WorkMode wm = workModeByEmployee.get(emp.getId());
+                    return wm != null && shift.getId().equals(wm.getId());
+                })
+                .collect(Collectors.toMap(Employee::getId, emp -> emp));
+
+        // Punches that belong to the shift, keyed by employee. A code punching twice keeps its first time.
+        Map<UUID, LocalTime> punchTimes = new java.util.LinkedHashMap<>();
+        for (PunchEntry punch : punches == null ? List.<PunchEntry>of() : punches) {
+            String code = punch.employeeCode().trim();
+            employeeRepository.findByCode(code)
+                    .filter(emp -> shiftEmployees.containsKey(emp.getId()))
+                    .ifPresent(emp -> punchTimes.putIfAbsent(emp.getId(), punch.time()));
+        }
+
+        List<EmployeeLogResponse> results = new ArrayList<>();
+
+        for (Employee emp : shiftEmployees.values()) {
+            Optional<EmployeeLog> existing = employeeLogRepository.findByDateAndEmployee_Id(date, emp.getId());
+            LocalTime x = punchTimes.get(emp.getId());
+
+            EmployeeLog changed = target.method() == PunchMethod.IN
+                    ? applyTargetedIn(date, emp, shift, existing, x)
+                    : applyTargetedOut(existing, x);
+
+            if (changed == null) continue;
+
+            EmployeeLog saved = employeeLogRepository.save(changed);
+            createAnomalyIfNeeded(saved);
+            results.add(EmployeeLogResponse.from(saved));
+        }
+
+        return new PunchResponse(results, buildNotifications(time, results));
+    }
+
+    /**
+     * IN side for one employee on the targeted shift. Returns the log to persist, or null when there is
+     * nothing to change.
+     *
+     * <p>A punch checks the employee in (PRESENT or LATE, per the shift's tolerance), including when an
+     * earlier IN check had already written an ABSENT for them — arriving late overwrites that absence.
+     * No punch and no log yet means they never showed: ABSENT, but only on a followed-up shift.
+     */
+    private EmployeeLog applyTargetedIn(
+            LocalDate date, Employee emp, WorkMode shift, Optional<EmployeeLog> existing, LocalTime x) {
+        if (x != null) {
+            // Already checked in — a second IN punch never moves the recorded time.
+            if (existing.isPresent() && existing.get().getLoggedIn() != null) return null;
+
+            if (existing.isEmpty()) return applyInPunch(date, emp, shift, x);
+
+            EmployeeLog log = existing.get();
+            log.setLoggedIn(x);
+            log.setStatus(statusForIn(shift, x));
+            return log;
+        }
+
+        // No punch: absent, unless they already have a log (from this or an earlier check).
+        if (existing.isPresent()) return null;
+        if (!shift.isFollowedUp()) return null;
+
+        return EmployeeLog.builder()
+                .date(date)
+                .employee(emp)
+                .workMode(shift)
+                .status(LogStatus.ABSENT)
+                .build();
+    }
+
+    /**
+     * OUT side for one employee on the targeted shift. Returns the log to persist, or null when there is
+     * nothing to change.
+     *
+     * <p>Only an open log — logged in, not yet out — can be closed by a punch or flagged MISSED_OUT
+     * without one. Someone who never logged in (no log, or an ABSENT one) is left alone.
+     */
+    private EmployeeLog applyTargetedOut(Optional<EmployeeLog> existing, LocalTime x) {
+        if (existing.isEmpty()) return null;
+
+        EmployeeLog log = existing.get();
+        if (log.getLoggedIn() == null || log.getLoggedOut() != null) return null;
+
+        if (x == null) {
+            log.setStatus(LogStatus.MISSED_OUT);
+            return log;
+        }
+
+        // A punch identical to the check-in time is the same read echoed back, not a check-out.
+        if (x.equals(log.getLoggedIn())) return null;
+
+        long minutes = ChronoUnit.MINUTES.between(log.getLoggedIn(), x);
+        if (minutes < 0) minutes += 24 * 60; // overnight shift
+        log.setLoggedOut(x);
+        log.setDuration((int) minutes);
+        return log;
+    }
+
+    /** Legacy untargeted batch: sweeps every scheduled employee for both absence and missing-out. */
+    private PunchResponse processAllPunches(
             LocalDate date, LocalTime time, List<EmployeeUpsert> employees, List<PunchEntry> punches) {
         upsertEmployees(employees);
 
@@ -86,17 +221,23 @@ public class EmployeeLogService {
 
         for (PunchEntry punch : punches) {
             LocalTime x = punch.time();
+            String code = punch.employeeCode().trim();
 
-            Employee employee = employeeRepository.findByCode(punch.employeeCode())
-                    .orElseThrow(() -> new ResponseStatusException(
-                            HttpStatus.NOT_FOUND, "Employee not found: " + punch.employeeCode()));
+            // Insert-first: a punch for a code we've never seen creates the employee
+            // (name defaults to the code, since a punch carries no name) instead of 404ing.
+            // Codes present in employees[] were already created with their real name above.
+            Employee employee = employeeRepository.findByCode(code)
+                    .orElseGet(() -> employeeRepository.save(Employee.builder()
+                            .name(code)
+                            .code(code)
+                            .build()));
 
             Optional<EmployeeLog> existing = employeeLogRepository.findByDateAndEmployee_Id(date, employee.getId());
 
             // Ignore punch if it duplicates the loggedIn time — do NOT add to processedCodes
             if (existing.isPresent() && x.equals(existing.get().getLoggedIn())) continue;
 
-            processedCodes.add(punch.employeeCode());
+            processedCodes.add(code);
 
             if (existing.isPresent()) {
                 EmployeeLog log = existing.get();
@@ -248,26 +389,22 @@ public class EmployeeLogService {
     }
 
     private EmployeeLog applyInPunch(LocalDate date, Employee employee, WorkMode wm, LocalTime x) {
-        EmployeeLog.EmployeeLogBuilder builder = EmployeeLog.builder()
+        return EmployeeLog.builder()
                 .date(date)
                 .employee(employee)
-                .workMode(wm);
+                .workMode(wm)
+                .loggedIn(x)
+                .status(statusForIn(wm, x))
+                .build();
+    }
 
-        if (wm != null && wm.isFollowedUp() && wm.getStartTime() != null) {
-            int tl = wm.getTolerantLate() != null ? wm.getTolerantLate() : 0;
-            LocalTime cutoffPresent = wm.getStartTime().plusMinutes(tl);
+    /** LATE once the punch reaches start + tolerance; PRESENT otherwise, and always when tracking is off. */
+    private LogStatus statusForIn(WorkMode wm, LocalTime x) {
+        if (wm == null || !wm.isFollowedUp() || wm.getStartTime() == null) return LogStatus.PRESENT;
 
-            if (x.isBefore(cutoffPresent)) {
-                builder.loggedIn(x).status(LogStatus.PRESENT);
-            } else {
-                builder.loggedIn(x).status(LogStatus.LATE);
-            }
-        } else {
-            // tracking off → always PRESENT
-            builder.loggedIn(x).status(LogStatus.PRESENT);
-        }
-
-        return builder.build();
+        int tl = wm.getTolerantLate() != null ? wm.getTolerantLate() : 0;
+        LocalTime cutoffPresent = wm.getStartTime().plusMinutes(tl);
+        return x.isBefore(cutoffPresent) ? LogStatus.PRESENT : LogStatus.LATE;
     }
 
 

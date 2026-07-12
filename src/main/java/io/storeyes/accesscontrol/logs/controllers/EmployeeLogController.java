@@ -34,6 +34,6 @@ public class EmployeeLogController {
     public PunchResponse punch(@RequestBody PunchBatchRequest body) {
         LocalDate date = body.timestamp().toLocalDate();
         return employeeLogService.processPunches(
-                date, body.timestamp().toLocalTime(), body.employees(), body.punches());
+                date, body.timestamp().toLocalTime(), body.target(), body.employees(), body.punches());
     }
 }
