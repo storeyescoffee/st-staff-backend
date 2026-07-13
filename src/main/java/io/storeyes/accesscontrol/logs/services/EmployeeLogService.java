@@ -66,6 +66,7 @@ public class EmployeeLogService {
         Map<UUID, WorkMode> workModeByEmployee = resolveScheduledWorkModes(date);
 
         return employeeRepository.findAll().stream()
+                .filter(emp -> !isUnnamed(emp))
                 .map(emp -> {
                     EmployeeLog log = logsByEmployee.get(emp.getId());
                     if (log != null) {
@@ -75,6 +76,17 @@ public class EmployeeLogService {
                     return EmployeeLogResponse.stub(date, emp, wm);
                 })
                 .toList();
+    }
+
+    /**
+     * An employee auto-created from a punch for an unknown code carries the code as its name, since a
+     * punch carries no name. Those placeholders stay out of the attendance list until someone names them.
+     */
+    private boolean isUnnamed(Employee emp) {
+        String name = emp.getName();
+        String code = emp.getCode();
+        if (name == null || code == null) return false;
+        return name.trim().equalsIgnoreCase(code.trim());
     }
 
     @Transactional
