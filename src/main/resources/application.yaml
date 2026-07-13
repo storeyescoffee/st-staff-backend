@@ -25,3 +25,10 @@ spring:
 
 server:
   port: ${SERVER_PORT:8080}
+  error:
+    include-message: always
+
+logging:
+  level:
+    org.springframework.web: DEBUG
+    io.storeyes.accesscontrol: DEBUG
