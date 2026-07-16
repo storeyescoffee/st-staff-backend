@@ -8,6 +8,7 @@ import io.storeyes.accesscontrol.logs.repositories.EmployeeLogRepository;
 import io.storeyes.accesscontrol.reports.dto.ReportSummaryRow;
 import io.storeyes.accesscontrol.workmodes.entities.WorkMode;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -39,7 +40,7 @@ public class ReportService {
         // Ensure all employees appear in the result even if they have no logs
         List<Employee> allEmployees = employeeId != null
                 ? employeeRepository.findById(employeeId).map(List::of).orElse(List.of())
-                : employeeRepository.findAll();
+                : employeeRepository.findAll(Sort.by(Sort.Direction.ASC, "displayOrder"));
 
         List<ReportSummaryRow> result = new ArrayList<>();
         for (Employee emp : allEmployees) {

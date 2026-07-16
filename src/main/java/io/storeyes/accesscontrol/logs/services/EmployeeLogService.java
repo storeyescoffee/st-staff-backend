@@ -26,6 +26,7 @@ import io.storeyes.accesscontrol.workmodes.entities.WorkMode;
 import io.storeyes.accesscontrol.workmodes.exceptions.WorkModeNotFoundException;
 import io.storeyes.accesscontrol.workmodes.repositories.WorkModeRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -65,7 +66,7 @@ public class EmployeeLogService {
         // Work mode per employee from the active schedule for this date
         Map<UUID, WorkMode> workModeByEmployee = resolveScheduledWorkModes(date);
 
-        return employeeRepository.findAll().stream()
+        return employeeRepository.findAll(Sort.by(Sort.Direction.ASC, "displayOrder")).stream()
                 .filter(emp -> !isUnnamed(emp))
                 .map(emp -> {
                     EmployeeLog log = logsByEmployee.get(emp.getId());
