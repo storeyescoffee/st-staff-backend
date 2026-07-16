@@ -14,6 +14,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.List;
 import java.util.UUID;
 
 @RestController
@@ -27,6 +28,12 @@ public class ScheduleDetailController {
     @ResponseStatus(HttpStatus.CREATED)
     public ScheduleDetailResponse create(@RequestBody ScheduleDetailRequest request) {
         return scheduleDetailService.create(request);
+    }
+
+    /** Upserts (or clears, when {@code workModeId} is null) many cells in one request. */
+    @PostMapping("/bulk")
+    public List<ScheduleDetailResponse> bulkUpsert(@RequestBody List<ScheduleDetailRequest> requests) {
+        return scheduleDetailService.bulkUpsert(requests);
     }
 
     @PutMapping("/{id}")

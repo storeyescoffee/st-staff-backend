@@ -18,7 +18,9 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 
 @Service
@@ -65,6 +67,45 @@ public class ScheduleDetailService {
             throw new ScheduleDetailNotFoundException(id);
         }
         scheduleDetailRepository.deleteById(id);
+    }
+
+    /**
+     * Upserts (or clears, when {@code workModeId} is null) many cells in one transaction.
+     * Returns the resulting details for every schedule touched, so the caller can replace its
+     * local state wholesale instead of reconciling a partial diff.
+     */
+    @Transactional
+    public List<ScheduleDetailResponse> bulkUpsert(List<ScheduleDetailRequest> items) {
+        Set<UUID> scheduleIds = new LinkedHashSet<>();
+        for (ScheduleDetailRequest req : items) {
+            scheduleIds.add(req.scheduleId());
+            ScheduleDetail existing = scheduleDetailRepository
+                    .findByScheduleIdAndEmployeeIdAndDow(req.scheduleId(), req.employeeId(), req.dow())
+                    .orElse(null);
+
+            if (req.workModeId() == null) {
+                if (existing != null) {
+                    scheduleDetailRepository.delete(existing);
+                }
+                continue;
+            }
+
+            WorkMode workMode = resolveWorkMode(req.workModeId());
+            ScheduleDetail detail = existing != null
+                    ? existing
+                    : ScheduleDetail.builder()
+                            .schedule(resolveSchedule(req.scheduleId()))
+                            .employee(resolveEmployee(req.employeeId()))
+                            .dow(req.dow())
+                            .build();
+            detail.setWorkMode(workMode);
+            scheduleDetailRepository.save(detail);
+        }
+
+        return scheduleIds.stream()
+                .flatMap(id -> scheduleDetailRepository.findByScheduleId(id).stream())
+                .map(ScheduleDetailResponse::from)
+                .toList();
     }
 
     private Schedule resolveSchedule(UUID scheduleId) {
