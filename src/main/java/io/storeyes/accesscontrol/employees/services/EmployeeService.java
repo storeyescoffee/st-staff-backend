@@ -10,13 +10,16 @@ import io.storeyes.accesscontrol.employees.exceptions.RoleNotFoundException;
 import io.storeyes.accesscontrol.employees.repositories.EmployeeRepository;
 import io.storeyes.accesscontrol.employees.repositories.RoleRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -27,7 +30,7 @@ public class EmployeeService {
 
     @Transactional(readOnly = true)
     public List<EmployeeResponse> findAll() {
-        return employeeRepository.findAll().stream()
+        return employeeRepository.findAll(Sort.by(Sort.Direction.ASC, "displayOrder")).stream()
                 .map(EmployeeResponse::from)
                 .toList();
     }
@@ -45,6 +48,7 @@ public class EmployeeService {
                 .code(request.code())
                 .credentials(resolveCredentials(request.credentials()))
                 .synced(request.synced() == null || request.synced())
+                .displayOrder(employeeRepository.findMaxDisplayOrder() + 1)
                 .build();
         return EmployeeResponse.from(employeeRepository.save(employee));
     }
@@ -68,6 +72,27 @@ public class EmployeeService {
             throw new EmployeeNotFoundException(id);
         }
         employeeRepository.deleteById(id);
+    }
+
+    /**
+     * Sets {@code displayOrder} to match the given id order — this is what drives the shared
+     * order used by attendance, schedules, reports and the employees list itself.
+     */
+    @Transactional
+    public List<EmployeeResponse> reorder(List<UUID> orderedIds) {
+        List<Employee> employees = employeeRepository.findAllById(orderedIds);
+        Map<UUID, Employee> byId = employees.stream()
+                .collect(Collectors.toMap(Employee::getId, e -> e));
+
+        for (int i = 0; i < orderedIds.size(); i++) {
+            Employee employee = byId.get(orderedIds.get(i));
+            if (employee == null) {
+                throw new EmployeeNotFoundException(orderedIds.get(i));
+            }
+            employee.setDisplayOrder(i);
+        }
+        employeeRepository.saveAll(employees);
+        return findAll();
     }
 
     private Employee getOrThrow(UUID id) {

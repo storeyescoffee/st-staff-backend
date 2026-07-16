@@ -59,4 +59,9 @@ public class Employee {
     @Column(name = "synced", nullable = false)
     @Builder.Default
     private boolean synced = true;
+
+    /** Position in manually-ordered lists (attendance, schedules, reports, employees). */
+    @Column(name = "display_order", nullable = false)
+    @Builder.Default
+    private int displayOrder = 0;
 }

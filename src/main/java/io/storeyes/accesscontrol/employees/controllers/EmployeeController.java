@@ -51,4 +51,10 @@ public class EmployeeController {
     public void delete(@PathVariable UUID id) {
         employeeService.delete(id);
     }
+
+    /** Body is the full list of employee ids in the desired display order. */
+    @PutMapping("/reorder")
+    public List<EmployeeResponse> reorder(@RequestBody List<UUID> orderedIds) {
+        return employeeService.reorder(orderedIds);
+    }
 }

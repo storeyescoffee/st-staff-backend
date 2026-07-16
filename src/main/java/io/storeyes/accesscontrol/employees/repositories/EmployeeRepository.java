@@ -19,4 +19,7 @@ public interface EmployeeRepository extends JpaRepository<Employee, UUID> {
     /** Returns, in a single query, the subset of the given codes that already exist. */
     @Query("select e.code from Employee e where e.code in :codes")
     Set<String> findExistingCodes(Collection<String> codes);
+
+    @Query("select coalesce(max(e.displayOrder), -1) from Employee e")
+    int findMaxDisplayOrder();
 }
