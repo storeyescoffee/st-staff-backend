@@ -35,6 +35,7 @@ import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -131,13 +132,21 @@ public class EmployeeLogService {
                 })
                 .collect(Collectors.toMap(Employee::getId, emp -> emp));
 
-        // Punches that belong to the shift, keyed by employee. A code punching twice keeps its first time.
-        Map<UUID, LocalTime> punchTimes = new java.util.LinkedHashMap<>();
+        // Punches that belong to the shift, keyed by employee. A code can punch more than once in one
+        // batch (e.g. a raw full-day device dump); resolvePunchTime decides which one counts.
+        Map<UUID, List<LocalTime>> punchesByEmployee = new java.util.LinkedHashMap<>();
         for (PunchEntry punch : punches == null ? List.<PunchEntry>of() : punches) {
             String code = punch.employeeCode().trim();
             employeeRepository.findByCode(code)
                     .filter(emp -> shiftEmployees.containsKey(emp.getId()))
-                    .ifPresent(emp -> punchTimes.putIfAbsent(emp.getId(), punch.time()));
+                    .ifPresent(emp -> punchesByEmployee
+                            .computeIfAbsent(emp.getId(), k -> new ArrayList<>())
+                            .add(punch.time()));
+        }
+
+        Map<UUID, LocalTime> punchTimes = new java.util.LinkedHashMap<>();
+        for (Map.Entry<UUID, List<LocalTime>> entry : punchesByEmployee.entrySet()) {
+            punchTimes.put(entry.getKey(), resolvePunchTime(entry.getValue(), target.method(), shift));
         }
 
         List<EmployeeLogResponse> results = new ArrayList<>();
@@ -207,19 +216,33 @@ public class EmployeeLogService {
         EmployeeLog log = existing.get();
         if (log.getLoggedIn() == null || log.getLoggedOut() != null) return null;
 
-        if (x == null) {
+        // No punch, or the only punch is an echo of the check-in read: no real check-out occurred.
+        if (x == null || x.equals(log.getLoggedIn())) {
             log.setStatus(LogStatus.MISSED_OUT);
             return log;
         }
-
-        // A punch identical to the check-in time is the same read echoed back, not a check-out.
-        if (x.equals(log.getLoggedIn())) return null;
 
         long minutes = ChronoUnit.MINUTES.between(log.getLoggedIn(), x);
         if (minutes < 0) minutes += 24 * 60; // overnight shift
         log.setLoggedOut(x);
         log.setDuration((int) minutes);
         return log;
+    }
+
+    /**
+     * Resolves the one punch time to use for an employee who may appear more than once in a batch
+     * (e.g. a raw full-day device dump). IN keeps the earliest arrival; OUT keeps the punch nearest the
+     * shift's end, so an earlier echo of the check-in doesn't get mistaken for the check-out.
+     */
+    private LocalTime resolvePunchTime(List<LocalTime> times, PunchMethod method, WorkMode shift) {
+        if (times.size() == 1) return times.get(0);
+        if (method == PunchMethod.IN) return times.stream().min(LocalTime::compareTo).orElseThrow();
+
+        LocalTime endTime = shift.getEndTime();
+        if (endTime == null) return times.stream().max(LocalTime::compareTo).orElseThrow();
+        return times.stream()
+                .min(Comparator.comparingLong(t -> Math.abs(ChronoUnit.MINUTES.between(endTime, t))))
+                .orElseThrow();
     }
 
     /** Legacy untargeted batch: sweeps every scheduled employee for both absence and missing-out. */

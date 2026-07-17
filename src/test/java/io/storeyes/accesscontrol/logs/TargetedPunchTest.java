@@ -92,7 +92,7 @@ class TargetedPunchTest {
         when(workModeRepository.findById(morning.getId())).thenReturn(Optional.of(morning));
         when(workModeRepository.findById(evening.getId())).thenReturn(Optional.of(evening));
 
-        when(employeeRepository.findAll()).thenReturn(roster);
+        when(employeeRepository.findAllByDeletedFalse()).thenReturn(roster);
         when(employeeRepository.findByCode(any())).thenAnswer(inv -> roster.stream()
                 .filter(e -> e.getCode().equals(inv.getArgument(0)))
                 .findFirst());
@@ -291,14 +291,40 @@ class TargetedPunchTest {
     }
 
     @Test
-    void outIgnoresAnEchoOfTheCheckInTime() {
+    void outFlagsMissedOutWhenOnlyPunchEchoesTheCheckIn() {
         Employee e = employee("E1", morning);
         existingLog(e, LocalTime.of(9, 0), null, LogStatus.PRESENT);
 
         punch(morning, PunchMethod.OUT, new PunchEntry("E1", LocalTime.of(9, 0)));
 
         assertThat(logs.get(e.getId()).getLoggedOut()).isNull();
-        assertThat(statusOf(e)).isEqualTo(LogStatus.PRESENT); // not MISSED_OUT either
+        assertThat(statusOf(e)).isEqualTo(LogStatus.MISSED_OUT);
+    }
+
+    @Test
+    void outPicksThePunchNearestShiftEndWhenEmployeePunchedTwice() {
+        Employee e = employee("E1", morning);
+        existingLog(e, LocalTime.of(8, 55), null, LogStatus.PRESENT);
+
+        punch(morning, PunchMethod.OUT,
+                new PunchEntry("E1", LocalTime.of(8, 55)),  // echo of the check-in
+                new PunchEntry("E1", LocalTime.of(17, 5)));  // the real check-out
+
+        EmployeeLog log = logs.get(e.getId());
+        assertThat(log.getLoggedOut()).isEqualTo(LocalTime.of(17, 5));
+        assertThat(log.getDuration()).isEqualTo(490);
+        assertThat(log.getStatus()).isNotEqualTo(LogStatus.MISSED_OUT);
+    }
+
+    @Test
+    void inPicksTheEarliestPunchWhenEmployeePunchedTwice() {
+        Employee e = employee("E1", morning);
+
+        punch(morning, PunchMethod.IN,
+                new PunchEntry("E1", LocalTime.of(11, 0)),
+                new PunchEntry("E1", LocalTime.of(8, 50)));
+
+        assertThat(logs.get(e.getId()).getLoggedIn()).isEqualTo(LocalTime.of(8, 50));
     }
 
     @Test
