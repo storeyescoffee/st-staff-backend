@@ -66,7 +66,7 @@ public class EmployeeLogService {
         // Work mode per employee from the active schedule for this date
         Map<UUID, WorkMode> workModeByEmployee = resolveScheduledWorkModes(date);
 
-        return employeeRepository.findAll(Sort.by(Sort.Direction.ASC, "displayOrder")).stream()
+        return employeeRepository.findAllByDeletedFalse(Sort.by(Sort.Direction.ASC, "displayOrder")).stream()
                 .filter(emp -> !isUnnamed(emp))
                 .map(emp -> {
                     EmployeeLog log = logsByEmployee.get(emp.getId());
@@ -124,7 +124,7 @@ public class EmployeeLogService {
         // Employees whose schedule for this date puts them on the targeted shift. Anyone else — including
         // codes that arrived in the punch list — is outside this check and is left untouched.
         Map<UUID, WorkMode> workModeByEmployee = resolveScheduledWorkModes(date);
-        Map<UUID, Employee> shiftEmployees = employeeRepository.findAll().stream()
+        Map<UUID, Employee> shiftEmployees = employeeRepository.findAllByDeletedFalse().stream()
                 .filter(emp -> {
                     WorkMode wm = workModeByEmployee.get(emp.getId());
                     return wm != null && shift.getId().equals(wm.getId());
@@ -239,7 +239,10 @@ public class EmployeeLogService {
             // Insert-first: a punch for a code we've never seen creates the employee
             // (name defaults to the code, since a punch carries no name) instead of 404ing.
             // Codes present in employees[] were already created with their real name above.
-            Employee employee = employeeRepository.findByCode(code)
+            Optional<Employee> existingByCode = employeeRepository.findByCode(code);
+            if (existingByCode.map(Employee::isDeleted).orElse(false)) continue; // soft-deleted — ignore this punch
+
+            Employee employee = existingByCode
                     .orElseGet(() -> employeeRepository.save(Employee.builder()
                             .name(code)
                             .code(code)
@@ -289,7 +292,7 @@ public class EmployeeLogService {
                 .map(p -> p.employeeCode().trim())
                 .collect(Collectors.toSet());
 
-        for (Employee emp : employeeRepository.findAll()) {
+        for (Employee emp : employeeRepository.findAllByDeletedFalse()) {
             if (requestCodes.contains(emp.getCode())) continue;
             if (employeeLogRepository.findByDateAndEmployee_Id(date, emp.getId()).isPresent()) continue;
 

@@ -40,7 +40,7 @@ public class ReportService {
         // Ensure all employees appear in the result even if they have no logs
         List<Employee> allEmployees = employeeId != null
                 ? employeeRepository.findById(employeeId).map(List::of).orElse(List.of())
-                : employeeRepository.findAll(Sort.by(Sort.Direction.ASC, "displayOrder"));
+                : employeeRepository.findAllByDeletedFalse(Sort.by(Sort.Direction.ASC, "displayOrder"));
 
         List<ReportSummaryRow> result = new ArrayList<>();
         for (Employee emp : allEmployees) {

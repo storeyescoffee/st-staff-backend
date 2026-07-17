@@ -64,4 +64,9 @@ public class Employee {
     @Column(name = "display_order", nullable = false)
     @Builder.Default
     private int displayOrder = 0;
+
+    /** Soft-delete flag: hidden from listings and punch processing, but not physically removed. */
+    @Column(name = "deleted", nullable = false)
+    @Builder.Default
+    private boolean deleted = false;
 }

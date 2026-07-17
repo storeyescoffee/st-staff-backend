@@ -30,7 +30,7 @@ public class EmployeeService {
 
     @Transactional(readOnly = true)
     public List<EmployeeResponse> findAll() {
-        return employeeRepository.findAll(Sort.by(Sort.Direction.ASC, "displayOrder")).stream()
+        return employeeRepository.findAllByDeletedFalse(Sort.by(Sort.Direction.ASC, "displayOrder")).stream()
                 .map(EmployeeResponse::from)
                 .toList();
     }
@@ -66,12 +66,12 @@ public class EmployeeService {
         return EmployeeResponse.from(employeeRepository.save(employee));
     }
 
+    /** Soft delete — hides the employee from listings and punch processing without erasing history. */
     @Transactional
     public void delete(UUID id) {
-        if (!employeeRepository.existsById(id)) {
-            throw new EmployeeNotFoundException(id);
-        }
-        employeeRepository.deleteById(id);
+        Employee employee = getOrThrow(id);
+        employee.setDeleted(true);
+        employeeRepository.save(employee);
     }
 
     /**
