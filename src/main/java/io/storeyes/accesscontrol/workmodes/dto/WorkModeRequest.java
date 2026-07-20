@@ -13,5 +13,6 @@ public record WorkModeRequest(
         LocalTime startTime,
         LocalTime endTime,
         Integer tolerantLate,
+        Integer tolerantOut,
         Boolean isFollowedUp) {
 }

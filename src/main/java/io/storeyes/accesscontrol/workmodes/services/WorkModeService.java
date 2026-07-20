@@ -38,6 +38,7 @@ public class WorkModeService {
                 .startTime(request.startTime())
                 .endTime(request.endTime())
                 .tolerantLate(request.tolerantLate())
+                .tolerantOut(request.tolerantOut())
                 .followedUp(Boolean.TRUE.equals(request.isFollowedUp()))
                 .assignedEmployee(0)
                 .build();
@@ -52,6 +53,7 @@ public class WorkModeService {
         mode.setStartTime(request.startTime());
         mode.setEndTime(request.endTime());
         mode.setTolerantLate(request.tolerantLate());
+        mode.setTolerantOut(request.tolerantOut());
         if (request.isFollowedUp() != null) {
             mode.setFollowedUp(request.isFollowedUp());
         }

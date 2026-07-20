@@ -48,6 +48,10 @@ public class WorkMode {
     @Column(name = "tolerant_late")
     private Integer tolerantLate;
 
+    /** Allowed early/late leeway around clock-out in minutes; null when not tracked. */
+    @Column(name = "tolerant_out")
+    private Integer tolerantOut;
+
     @Column(name = "followed_up", nullable = false)
     private boolean followedUp;
 
