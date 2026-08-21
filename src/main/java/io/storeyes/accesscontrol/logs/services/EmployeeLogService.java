@@ -13,9 +13,12 @@ import io.storeyes.accesscontrol.logs.dto.PunchEntry;
 import io.storeyes.accesscontrol.logs.dto.PunchMethod;
 import io.storeyes.accesscontrol.logs.dto.PunchResponse;
 import io.storeyes.accesscontrol.logs.dto.PunchTarget;
+import io.storeyes.accesscontrol.logs.dto.ShiftHistoryGroupResponse;
 import io.storeyes.accesscontrol.logs.entities.EmployeeLog;
+import io.storeyes.accesscontrol.logs.entities.EmployeeLogsHistory;
 import io.storeyes.accesscontrol.logs.entities.LogStatus;
 import io.storeyes.accesscontrol.logs.repositories.EmployeeLogRepository;
+import io.storeyes.accesscontrol.logs.repositories.EmployeeLogsHistoryRepository;
 import io.storeyes.accesscontrol.notificationrules.dto.NotificationRuleResponse;
 import io.storeyes.accesscontrol.notificationrules.services.NotificationRuleService;
 import io.storeyes.accesscontrol.schedules.entities.Schedule;
@@ -29,6 +32,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import tools.jackson.databind.ObjectMapper;
 
 import java.time.LocalDate;
 import java.time.LocalTime;
@@ -56,6 +60,8 @@ public class EmployeeLogService {
     private final AnomalyRepository anomalyRepository;
     private final NotificationRuleService notificationRuleService;
     private final WorkModeRepository workModeRepository;
+    private final EmployeeLogsHistoryRepository employeeLogsHistoryRepository;
+    private final ObjectMapper objectMapper;
 
     @Transactional(readOnly = true)
     public List<EmployeeLogResponse> getLogsForDate(LocalDate date) {
@@ -81,6 +87,43 @@ public class EmployeeLogService {
     }
 
     /**
+     * Punch history for a date, grouped by shift: each shift punched that day gets its latest {@code IN}
+     * batch and its latest {@code OUT} batch. Untargeted (legacy) batches carry no shift or direction and
+     * are excluded. Shifts are ordered by their most recent activity that day.
+     */
+    @Transactional(readOnly = true)
+    public List<ShiftHistoryGroupResponse> getHistoryForDate(LocalDate date) {
+        record ShiftKey(String name, LocalTime start, LocalTime end) {}
+
+        Map<ShiftKey, EmployeeLogsHistory> latestIn = new java.util.LinkedHashMap<>();
+        Map<ShiftKey, EmployeeLogsHistory> latestOut = new java.util.LinkedHashMap<>();
+        java.util.LinkedHashSet<ShiftKey> shiftOrder = new java.util.LinkedHashSet<>();
+
+        // Rows come back newest-first, so the first row seen per (shift, direction) is its latest batch.
+        for (EmployeeLogsHistory h : employeeLogsHistoryRepository.findByDateOrderByCreatedAtDesc(date)) {
+            if (h.getMethod() == null) continue;
+            ShiftKey key = new ShiftKey(h.getShiftName(), h.getShiftStartTime(), h.getShiftEndTime());
+            shiftOrder.add(key);
+            Map<ShiftKey, EmployeeLogsHistory> bucket = h.getMethod() == PunchMethod.IN ? latestIn : latestOut;
+            bucket.putIfAbsent(key, h);
+        }
+
+        return shiftOrder.stream()
+                .map(key -> new ShiftHistoryGroupResponse(
+                        new ShiftHistoryGroupResponse.ShiftInfo(key.name(), key.start(), key.end()),
+                        toDirection(latestIn.get(key)),
+                        toDirection(latestOut.get(key))))
+                .toList();
+    }
+
+    private ShiftHistoryGroupResponse.Direction toDirection(EmployeeLogsHistory h) {
+        if (h == null) return null;
+        return new ShiftHistoryGroupResponse.Direction(
+                objectMapper.readTree(h.getLogs()),
+                h.getNotification() == null ? null : objectMapper.readTree(h.getNotification()));
+    }
+
+    /**
      * An employee auto-created from a punch for an unknown code carries the code as its name, since a
      * punch carries no name. Those placeholders stay out of the attendance list until someone names them.
      */
@@ -98,10 +141,34 @@ public class EmployeeLogService {
             PunchTarget target,
             List<EmployeeUpsert> employees,
             List<PunchEntry> punches) {
+        WorkMode shift = null;
+        PunchResponse response;
+
         if (target != null && target.shiftId() != null && target.method() != null) {
-            return processTargetedPunches(date, time, target, employees, punches);
+            shift = workModeRepository.findById(target.shiftId())
+                    .orElseThrow(() -> new WorkModeNotFoundException(target.shiftId()));
+            response = processTargetedPunches(date, time, target, shift, employees, punches);
+        } else {
+            response = processAllPunches(date, time, employees, punches);
         }
-        return processAllPunches(date, time, employees, punches);
+
+        saveHistory(date, target, shift, response);
+        return response;
+    }
+
+    /** Snapshot of this punch batch — logs produced and notifications computed — kept for audit purposes. */
+    private void saveHistory(LocalDate date, PunchTarget target, WorkMode shift, PunchResponse response) {
+        employeeLogsHistoryRepository.save(EmployeeLogsHistory.builder()
+                .date(date)
+                .shiftName(shift != null ? shift.getName() : null)
+                .shiftStartTime(shift != null ? shift.getStartTime() : null)
+                .shiftEndTime(shift != null ? shift.getEndTime() : null)
+                .method(target != null ? target.method() : null)
+                .logs(objectMapper.writeValueAsString(response.logs()))
+                .notification(response.notifications() == null
+                        ? null
+                        : objectMapper.writeValueAsString(response.notifications()))
+                .build());
     }
 
     /**
@@ -115,12 +182,10 @@ public class EmployeeLogService {
             LocalDate date,
             LocalTime time,
             PunchTarget target,
+            WorkMode shift,
             List<EmployeeUpsert> employees,
             List<PunchEntry> punches) {
         upsertEmployees(employees);
-
-        WorkMode shift = workModeRepository.findById(target.shiftId())
-                .orElseThrow(() -> new WorkModeNotFoundException(target.shiftId()));
 
         // Employees whose schedule for this date puts them on the targeted shift. Anyone else — including
         // codes that arrived in the punch list — is outside this check and is left untouched.

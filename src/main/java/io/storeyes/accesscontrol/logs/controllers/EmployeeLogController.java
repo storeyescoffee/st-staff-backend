@@ -3,6 +3,7 @@ package io.storeyes.accesscontrol.logs.controllers;
 import io.storeyes.accesscontrol.logs.dto.EmployeeLogResponse;
 import io.storeyes.accesscontrol.logs.dto.PunchBatchRequest;
 import io.storeyes.accesscontrol.logs.dto.PunchResponse;
+import io.storeyes.accesscontrol.logs.dto.ShiftHistoryGroupResponse;
 import io.storeyes.accesscontrol.logs.services.EmployeeLogService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.format.annotation.DateTimeFormat;
@@ -28,6 +29,14 @@ public class EmployeeLogController {
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date) {
         LocalDate target = date != null ? date : LocalDate.now();
         return employeeLogService.getLogsForDate(target);
+    }
+
+    /** History is scoped to the requesting store via the X-STORE-CODE header, same as every other endpoint. */
+    @GetMapping("/history")
+    public List<ShiftHistoryGroupResponse> history(
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date) {
+        LocalDate target = date != null ? date : LocalDate.now();
+        return employeeLogService.getHistoryForDate(target);
     }
 
     @PostMapping("/punch")
