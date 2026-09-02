@@ -156,6 +156,60 @@ public class EmployeeLogService {
         return response;
     }
 
+    /**
+     * A single live event pushed straight from a device (Hikvision HTTP host notification), for one
+     * employee. First accepted event of the day for that employee opens the log as a check-in; the
+     * next event closes it. Unlike the batch paths there is no absence / missed-out sweep — only the
+     * one employee is ever touched.
+     *
+     * <p>Mirrors the per-punch body of {@link #processAllPunches}: insert-first for an unknown code,
+     * a soft-deleted code is ignored, a later punch closes the log with an overnight-aware duration,
+     * and an event that merely echoes the recorded check-in time does nothing.
+     */
+    @Transactional
+    public PunchResponse processDeviceEvent(LocalDate date, LocalTime time, String employeeCode) {
+        String code = employeeCode.trim();
+
+        Optional<Employee> existingByCode = employeeRepository.findByCode(code);
+        if (existingByCode.map(Employee::isDeleted).orElse(false)) {
+            return new PunchResponse(List.of(), null); // soft-deleted — ignore this event
+        }
+        Employee employee = existingByCode.orElseGet(() -> employeeRepository.save(Employee.builder()
+                .name(code)
+                .code(code)
+                .build()));
+
+        Optional<EmployeeLog> existing = employeeLogRepository.findByDateAndEmployee_Id(date, employee.getId());
+        PunchMethod method;
+        EmployeeLog saved;
+
+        if (existing.isEmpty()) {
+            WorkMode wm = resolveScheduledWorkModes(date).get(employee.getId());
+            saved = employeeLogRepository.save(applyInPunch(date, employee, wm, time));
+            createAnomalyIfNeeded(saved);
+            method = PunchMethod.IN;
+        } else {
+            EmployeeLog log = existing.get();
+            // Nothing to do: no open check-in, the day is already closed, or the event echoes the check-in.
+            if (log.getLoggedIn() == null || log.getLoggedOut() != null || time.equals(log.getLoggedIn())) {
+                return new PunchResponse(List.of(), null);
+            }
+            long minutes = ChronoUnit.MINUTES.between(log.getLoggedIn(), time);
+            if (minutes < 0) minutes += 24 * 60; // overnight shift
+            log.setLoggedOut(time);
+            log.setDuration((int) minutes);
+            saved = employeeLogRepository.save(log);
+            method = PunchMethod.OUT;
+        }
+
+        List<EmployeeLogResponse> results = List.of(EmployeeLogResponse.from(saved));
+        PunchResponse response = new PunchResponse(results, buildNotifications(time, results));
+
+        WorkMode shift = saved.getWorkMode();
+        saveHistory(date, new PunchTarget(shift != null ? shift.getId() : null, method), shift, response);
+        return response;
+    }
+
     /** Snapshot of this punch batch — logs produced and notifications computed — kept for audit purposes. */
     private void saveHistory(LocalDate date, PunchTarget target, WorkMode shift, PunchResponse response) {
         employeeLogsHistoryRepository.save(EmployeeLogsHistory.builder()

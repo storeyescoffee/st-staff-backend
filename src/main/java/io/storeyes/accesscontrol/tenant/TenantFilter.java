@@ -1,5 +1,6 @@
 package io.storeyes.accesscontrol.tenant;
 
+import io.storeyes.accesscontrol.devices.config.DeviceIngestProperties;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -18,16 +19,25 @@ import java.io.IOException;
 @RequiredArgsConstructor
 public class TenantFilter extends OncePerRequestFilter {
 
+    /** Device push notifications carry no X-STORE-CODE; they are attributed to a configured tenant. */
+    private static final String DEVICE_PATH_PREFIX = "/api/device-events";
+
     private final SchemaService schemaService;
+    private final DeviceIngestProperties deviceIngestProperties;
 
     @Override
     protected void doFilterInternal(HttpServletRequest request,
                                     HttpServletResponse response,
                                     FilterChain chain) throws ServletException, IOException {
         String storeCode = request.getHeader("X-STORE-CODE");
-        String schema = (storeCode == null || storeCode.isBlank())
-                ? "public"
-                : storeCode.trim().toLowerCase();
+        String schema;
+        if (storeCode != null && !storeCode.isBlank()) {
+            schema = storeCode.trim().toLowerCase();
+        } else if (request.getRequestURI().startsWith(DEVICE_PATH_PREFIX)) {
+            schema = deviceIngestProperties.tenant().trim().toLowerCase();
+        } else {
+            schema = "public";
+        }
         try {
             schemaService.ensureSchema(schema);
             TenantContext.set(schema);

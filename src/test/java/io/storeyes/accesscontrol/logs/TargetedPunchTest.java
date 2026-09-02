@@ -11,6 +11,7 @@ import io.storeyes.accesscontrol.logs.dto.PunchTarget;
 import io.storeyes.accesscontrol.logs.entities.EmployeeLog;
 import io.storeyes.accesscontrol.logs.entities.LogStatus;
 import io.storeyes.accesscontrol.logs.repositories.EmployeeLogRepository;
+import io.storeyes.accesscontrol.logs.repositories.EmployeeLogsHistoryRepository;
 import io.storeyes.accesscontrol.logs.services.EmployeeLogService;
 import io.storeyes.accesscontrol.notificationrules.services.NotificationRuleService;
 import io.storeyes.accesscontrol.schedules.entities.Schedule;
@@ -23,6 +24,7 @@ import io.storeyes.accesscontrol.workmodes.repositories.WorkModeRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
+import tools.jackson.databind.ObjectMapper;
 
 import java.time.LocalDate;
 import java.time.LocalTime;
@@ -83,10 +85,13 @@ class TargetedPunchTest {
         ScheduleRepository scheduleRepository = Mockito.mock(ScheduleRepository.class);
         ScheduleDetailRepository scheduleDetailRepository = Mockito.mock(ScheduleDetailRepository.class);
         NotificationRuleService notificationRuleService = Mockito.mock(NotificationRuleService.class);
+        EmployeeLogsHistoryRepository employeeLogsHistoryRepository =
+                Mockito.mock(EmployeeLogsHistoryRepository.class);
 
         service = new EmployeeLogService(
                 employeeLogRepository, employeeRepository, scheduleRepository, scheduleDetailRepository,
-                anomalyRepository, notificationRuleService, workModeRepository);
+                anomalyRepository, notificationRuleService, workModeRepository,
+                employeeLogsHistoryRepository, new ObjectMapper());
 
         when(notificationRuleService.findAll()).thenReturn(List.of());
         when(workModeRepository.findById(morning.getId())).thenReturn(Optional.of(morning));
