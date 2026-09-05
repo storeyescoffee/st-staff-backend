@@ -68,6 +68,43 @@ class DeviceEventControllerTest {
     }
 
     @Test
+    void acceptsARawMultipartBodyWeParseOurselves() throws Exception {
+        String boundary = "boundaryABC";
+        String raw = "--" + boundary + "\r\n"
+                + "Content-Disposition: form-data; name=\"event_log\"\r\n\r\n"
+                + SUCCESS_EVENT + "\r\n"
+                + "--" + boundary + "\r\n"
+                + "Content-Disposition: form-data; name=\"Picture\"; filename=\"snap.jpg\"\r\n"
+                + "Content-Type: image/jpeg\r\n\r\n"
+                + "ÿØÿàignored-bytes\r\n"
+                + "--" + boundary + "--\r\n";
+
+        mockMvc.perform(post("/api/device-events")
+                        .contentType("multipart/form-data; boundary=" + boundary)
+                        .content(raw.getBytes(java.nio.charset.StandardCharsets.ISO_8859_1)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("ok"));
+
+        verify(deviceEventService).ingest(any());
+    }
+
+    @Test
+    void stillFindsTheEventPartWhenTheClosingBoundaryIsMissing() throws Exception {
+        String boundary = "boundaryABC";
+        String truncated = "--" + boundary + "\r\n"
+                + "Content-Disposition: form-data; name=\"event_log\"\r\n\r\n"
+                + SUCCESS_EVENT; // device dropped the connection before the closing boundary
+
+        mockMvc.perform(post("/api/device-events")
+                        .contentType("multipart/form-data; boundary=" + boundary)
+                        .content(truncated.getBytes(java.nio.charset.StandardCharsets.ISO_8859_1)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("ok"));
+
+        verify(deviceEventService).ingest(any());
+    }
+
+    @Test
     void acceptsABareJsonBody() throws Exception {
         mockMvc.perform(post("/api/device-events")
                         .contentType(MediaType.APPLICATION_JSON)

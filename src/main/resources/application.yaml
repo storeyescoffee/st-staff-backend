@@ -24,8 +24,10 @@ spring:
     default-schema: demo
   servlet:
     multipart:
-      max-file-size: 10MB      # face/fingerprint snapshots ride along the event push; accepted and discarded
-      max-request-size: 12MB
+      # Disabled on purpose: Hikvision terminals half-close the socket / overstate Content-Length,
+      # so the eager resolver 400'd every push before DeviceEventController ran. The controller now
+      # reads and splits the multipart body itself (see its class javadoc).
+      enabled: false
 
 server:
   port: ${SERVER_PORT:8080}
