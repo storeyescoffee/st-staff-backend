@@ -82,7 +82,17 @@ public class DeviceEventController {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(Map.of("status", "unauthorized"));
         }
 
-        byte[] eventPart = extractEventPart(request);
+        logInboundPush(request);
+
+        byte[] eventPart;
+        try {
+            eventPart = extractEventPart(request);
+        } catch (IOException e) {
+            // The terminal dropped the connection before we could read the body. Nothing to process;
+            // ack anyway so it doesn't spin in a re-push loop against us.
+            log.warn("Device push body unreadable ({}); acknowledging", e.toString());
+            return ResponseEntity.ok(Map.of("status", "ignored"));
+        }
         if (eventPart == null) {
             return ResponseEntity.badRequest().body(Map.of("status", "error", "reason", "no event data"));
         }
@@ -100,6 +110,19 @@ public class DeviceEventController {
             log.error("Failed to process device push; acknowledging anyway to stop the re-push loop", e);
             return ResponseEntity.ok(Map.of("status", "ignored"));
         }
+    }
+
+    /** One line per push describing what the terminal actually sent, before we touch the body. */
+    private void logInboundPush(HttpServletRequest request) {
+        log.info("Device push from {} ({}): {} {} | Content-Type={} Content-Length={} Transfer-Encoding={} Expect={}",
+                request.getRemoteAddr(),
+                request.getHeader("User-Agent"),
+                request.getMethod(),
+                request.getRequestURI(),
+                request.getContentType(),
+                request.getHeader("Content-Length"),
+                request.getHeader("Transfer-Encoding"),
+                request.getHeader("Expect"));
     }
 
     private boolean secretMatches(HttpServletRequest request) {
@@ -174,6 +197,7 @@ public class DeviceEventController {
             log.warn("Device push stream truncated after {} bytes ({}); parsing what arrived",
                     buffer.size(), e.toString());
         }
+        log.info("Device push body read: {} bytes", buffer.size());
         return buffer.toByteArray();
     }
 
