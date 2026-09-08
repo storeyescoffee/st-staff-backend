@@ -37,7 +37,8 @@ public class DeviceEventService {
             employeeLogService.processDeviceEvent(
                     event.dateTime().toLocalDate(),
                     event.dateTime().toLocalTime(),
-                    event.employeeCode());
+                    event.employeeCode(),
+                    event.personName());
         } catch (DataIntegrityViolationException e) {
             // Concurrent event for the same (date, employee) already created the log — treat as handled.
             log.debug("Concurrent device event {} lost the race — already recorded", event.sourceKey());

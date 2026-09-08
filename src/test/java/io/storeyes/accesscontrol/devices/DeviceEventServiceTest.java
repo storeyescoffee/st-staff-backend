@@ -48,7 +48,7 @@ class DeviceEventServiceTest {
         service.ingest(event);
 
         verify(employeeLogService).processDeviceEvent(
-                LocalDate.of(2026, 9, 2), LocalTime.of(8, 5), "E001");
+                LocalDate.of(2026, 9, 2), LocalTime.of(8, 5), "E001", "Alice");
 
         ArgumentCaptor<DeviceEvent> saved = ArgumentCaptor.forClass(DeviceEvent.class);
         verify(deviceEventRepository).save(saved.capture());
@@ -64,14 +64,14 @@ class DeviceEventServiceTest {
 
         service.ingest(event);
 
-        verify(employeeLogService, never()).processDeviceEvent(any(), any(), any());
+        verify(employeeLogService, never()).processDeviceEvent(any(), any(), any(), any());
         verify(deviceEventRepository, never()).save(any());
     }
 
     @Test
     void recordsTheLedgerRowEvenWhenAConcurrentPunchWonTheRace() {
         when(deviceEventRepository.existsBySourceKey("aa:bb:1001")).thenReturn(false);
-        when(employeeLogService.processDeviceEvent(any(), any(), any()))
+        when(employeeLogService.processDeviceEvent(any(), any(), any(), any()))
                 .thenThrow(new DataIntegrityViolationException("uq_employee_logs_date_emp"));
 
         service.ingest(event);

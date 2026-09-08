@@ -134,6 +134,21 @@ public class EmployeeLogService {
         return name.trim().equalsIgnoreCase(code.trim());
     }
 
+    /**
+     * Fills in an employee's real name from the device-reported one, but only while the employee has
+     * none: rows auto-created by a punch carry their code as a placeholder name (and are hidden from
+     * listings by {@link #isUnnamed}), so the first event that names them makes them visible. A name
+     * set by a user is never overwritten.
+     */
+    private void adoptDeviceName(Employee employee, String deviceName) {
+        if (deviceName == null || deviceName.equalsIgnoreCase(employee.getCode())) return;
+        String current = employee.getName();
+        boolean placeholder = current == null || current.isBlank() || isUnnamed(employee);
+        if (!placeholder) return;
+        employee.setName(deviceName);
+        employeeRepository.save(employee);
+    }
+
     @Transactional
     public PunchResponse processPunches(
             LocalDate date,
@@ -165,19 +180,24 @@ public class EmployeeLogService {
      * <p>Mirrors the per-punch body of {@link #processAllPunches}: insert-first for an unknown code,
      * a soft-deleted code is ignored, a later punch closes the log with an overnight-aware duration,
      * and an event that merely echoes the recorded check-in time does nothing.
+     *
+     * @param personName device-reported name, if any; adopted when the employee has no real name yet
      */
     @Transactional
-    public PunchResponse processDeviceEvent(LocalDate date, LocalTime time, String employeeCode) {
+    public PunchResponse processDeviceEvent(
+            LocalDate date, LocalTime time, String employeeCode, String personName) {
         String code = employeeCode.trim();
+        String deviceName = personName == null || personName.isBlank() ? null : personName.trim();
 
         Optional<Employee> existingByCode = employeeRepository.findByCode(code);
         if (existingByCode.map(Employee::isDeleted).orElse(false)) {
             return new PunchResponse(List.of(), null); // soft-deleted — ignore this event
         }
         Employee employee = existingByCode.orElseGet(() -> employeeRepository.save(Employee.builder()
-                .name(code)
+                .name(deviceName != null ? deviceName : code)
                 .code(code)
                 .build()));
+        adoptDeviceName(employee, deviceName);
 
         Optional<EmployeeLog> existing = employeeLogRepository.findByDateAndEmployee_Id(date, employee.getId());
         PunchMethod method;
