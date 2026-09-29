@@ -2,6 +2,7 @@ package io.storeyes.accesscontrol.logs.dto;
 
 import io.storeyes.accesscontrol.logs.entities.LogStatus;
 
+import java.time.LocalTime;
 import java.util.List;
 
 /**
@@ -26,5 +27,16 @@ public record NotificationBatch(
         String summary,
         List<Item> items) {
 
-    public record Item(String employeeCode, String employeeName, LogStatus status) {}
+    /**
+     * @param shiftStart  planned start of the employee's shift, if scheduled
+     * @param arrivedAt   recorded check-in time, if any
+     * @param minutesLate minutes between {@code shiftStart} and {@code arrivedAt}; only set for LATE
+     */
+    public record Item(
+            String employeeCode,
+            String employeeName,
+            LogStatus status,
+            LocalTime shiftStart,
+            LocalTime arrivedAt,
+            Integer minutesLate) {}
 }

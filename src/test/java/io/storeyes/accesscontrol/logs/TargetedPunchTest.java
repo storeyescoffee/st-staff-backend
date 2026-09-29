@@ -4,6 +4,7 @@ import io.storeyes.accesscontrol.anomalies.repositories.AnomalyRepository;
 import io.storeyes.accesscontrol.employees.entities.Employee;
 import io.storeyes.accesscontrol.employees.repositories.EmployeeRepository;
 import io.storeyes.accesscontrol.logs.dto.EmployeeLogResponse;
+import io.storeyes.accesscontrol.logs.dto.NotificationBatch;
 import io.storeyes.accesscontrol.logs.dto.PunchEntry;
 import io.storeyes.accesscontrol.logs.dto.PunchMethod;
 import io.storeyes.accesscontrol.logs.dto.PunchResponse;
@@ -13,6 +14,7 @@ import io.storeyes.accesscontrol.logs.entities.LogStatus;
 import io.storeyes.accesscontrol.logs.repositories.EmployeeLogRepository;
 import io.storeyes.accesscontrol.logs.repositories.EmployeeLogsHistoryRepository;
 import io.storeyes.accesscontrol.logs.services.EmployeeLogService;
+import io.storeyes.accesscontrol.notificationrules.dto.NotificationRuleResponse;
 import io.storeyes.accesscontrol.notificationrules.services.NotificationRuleService;
 import io.storeyes.accesscontrol.schedules.entities.Schedule;
 import io.storeyes.accesscontrol.schedules.entities.ScheduleDetail;
@@ -69,6 +71,7 @@ class TargetedPunchTest {
     private EmployeeRepository employeeRepository;
     private AnomalyRepository anomalyRepository;
     private WorkModeRepository workModeRepository;
+    private NotificationRuleService notificationRuleService;
     private EmployeeLogService service;
 
     /** Existing logs for DATE, keyed by employee id — the mocked DB the service reads and writes. */
@@ -84,7 +87,7 @@ class TargetedPunchTest {
         workModeRepository = Mockito.mock(WorkModeRepository.class);
         ScheduleRepository scheduleRepository = Mockito.mock(ScheduleRepository.class);
         ScheduleDetailRepository scheduleDetailRepository = Mockito.mock(ScheduleDetailRepository.class);
-        NotificationRuleService notificationRuleService = Mockito.mock(NotificationRuleService.class);
+        notificationRuleService = Mockito.mock(NotificationRuleService.class);
         EmployeeLogsHistoryRepository employeeLogsHistoryRepository =
                 Mockito.mock(EmployeeLogsHistoryRepository.class);
 
@@ -376,5 +379,35 @@ class TargetedPunchTest {
 
         assertThat(statusOf(onMorning)).isEqualTo(LogStatus.LATE);
         assertThat(statusOf(onEvening)).isEqualTo(LogStatus.MISSED_OUT); // legacy cross-shift sweep
+    }
+
+    // ---------- device event lateness notification ----------
+
+    @Test
+    void lateDeviceEventCarriesMinutesPastThePlannedShiftStart() {
+        when(notificationRuleService.findAll()).thenReturn(List.of(new NotificationRuleResponse("late", true)));
+        employee("E9", morning);
+
+        PunchResponse response = service.processDeviceEvent(DATE, LocalTime.of(9, 22), "E9", null);
+
+        NotificationBatch batch = response.notifications();
+        assertThat(batch.send()).isTrue();
+        assertThat(batch.lateCount()).isEqualTo(1);
+        NotificationBatch.Item item = batch.items().get(0);
+        assertThat(item.status()).isEqualTo(LogStatus.LATE);
+        assertThat(item.shiftStart()).isEqualTo(LocalTime.of(9, 0));
+        assertThat(item.arrivedAt()).isEqualTo(LocalTime.of(9, 22));
+        assertThat(item.minutesLate()).isEqualTo(22);
+    }
+
+    @Test
+    void onTimeDeviceEventProducesNoNotificationItem() {
+        when(notificationRuleService.findAll()).thenReturn(List.of(new NotificationRuleResponse("late", true)));
+        employee("E10", morning);
+
+        PunchResponse response = service.processDeviceEvent(DATE, LocalTime.of(9, 10), "E10", null);
+
+        assertThat(response.notifications().send()).isFalse();
+        assertThat(response.notifications().items()).isEmpty();
     }
 }

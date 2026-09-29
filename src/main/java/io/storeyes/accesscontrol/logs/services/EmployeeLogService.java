@@ -494,8 +494,7 @@ public class EmployeeLogService {
         List<NotificationBatch.Item> items = results.stream()
                 .filter(r -> (r.status() == LogStatus.LATE && lateOn)
                         || (r.status() == LogStatus.ABSENT && absenceOn))
-                .map(r -> new NotificationBatch.Item(
-                        r.employee().code(), r.employee().name(), r.status()))
+                .map(this::toNotificationItem)
                 .toList();
 
         int lateCount = (int) items.stream().filter(i -> i.status() == LogStatus.LATE).count();
@@ -506,6 +505,20 @@ public class EmployeeLogService {
 
         return new NotificationBatch(send, dndSuppressed, grouped, lateCount, absenceCount,
                 buildSummary(lateCount, absenceCount), items);
+    }
+
+    /** One notifiable log; a LATE item carries how far past the planned shift start the check-in was. */
+    private NotificationBatch.Item toNotificationItem(EmployeeLogResponse r) {
+        LocalTime shiftStart = r.workMode() != null ? r.workMode().startTime() : null;
+        LocalTime arrivedAt = r.loggedIn();
+        Integer minutesLate = null;
+        if (r.status() == LogStatus.LATE && shiftStart != null && arrivedAt != null) {
+            long minutes = ChronoUnit.MINUTES.between(shiftStart, arrivedAt);
+            if (minutes < 0) minutes += 24 * 60; // overnight shift
+            minutesLate = (int) minutes;
+        }
+        return new NotificationBatch.Item(
+                r.employee().code(), r.employee().name(), r.status(), shiftStart, arrivedAt, minutesLate);
     }
 
     /** DND window spans midnight: [23:00, 24:00) ∪ [00:00, 06:30]. */

@@ -4,6 +4,7 @@ import io.storeyes.accesscontrol.devices.config.DeviceIngestProperties;
 import io.storeyes.accesscontrol.devices.dto.HikvisionEvent;
 import io.storeyes.accesscontrol.devices.parsing.HikvisionEventParser;
 import io.storeyes.accesscontrol.devices.services.DeviceEventService;
+import io.storeyes.accesscontrol.logs.dto.NotificationBatch;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
@@ -49,8 +50,11 @@ import java.util.regex.Pattern;
  *
  * <p>The endpoint always answers {@code 200 {"status":...}} once a request is understood, so the
  * device does not enter its re-push loop; deduplication happens in {@link DeviceEventService}.
- * There is no {@code X-STORE-CODE} on a device push — {@code TenantFilter} attributes these requests
- * to the configured {@code device.ingest.tenant}.
+ * The terminal itself sends no {@code X-STORE-CODE}: behind the st-app-back proxy it is set from the
+ * terminal's registered store; a direct push falls back to the configured {@code device.ingest.tenant}.
+ *
+ * <p>A processed event answers {@code {"status":"ok","notifications":{...}}} when the punch produced a
+ * notification batch (e.g. a LATE check-in); the proxy dispatches it and the terminal ignores it.
  */
 @RestController
 @RequestMapping("/api/device-events")
@@ -74,7 +78,7 @@ public class DeviceEventController {
     }
 
     @PostMapping
-    public ResponseEntity<Map<String, String>> receive(HttpServletRequest request) throws IOException {
+    public ResponseEntity<Map<String, Object>> receive(HttpServletRequest request) throws IOException {
         if (!properties.enabled()) {
             return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(Map.of("status", "disabled"));
         }
@@ -103,8 +107,10 @@ public class DeviceEventController {
                 // Unparseable or filtered noise — acknowledge so the device does not retry.
                 return ResponseEntity.ok(Map.of("status", "ignored"));
             }
-            deviceEventService.ingest(event.get());
-            return ResponseEntity.ok(Map.of("status", "ok"));
+            Optional<NotificationBatch> notifications = deviceEventService.ingest(event.get());
+            return ResponseEntity.ok(notifications
+                    .<Map<String, Object>>map(n -> Map.of("status", "ok", "notifications", n))
+                    .orElseGet(() -> Map.of("status", "ok")));
         } catch (RuntimeException e) {
             // Never let a processing failure become a non-2xx: the device would re-push indefinitely.
             log.error("Failed to process device push; acknowledging anyway to stop the re-push loop", e);

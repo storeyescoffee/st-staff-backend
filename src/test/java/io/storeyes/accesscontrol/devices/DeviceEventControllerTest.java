@@ -4,6 +4,8 @@ import io.storeyes.accesscontrol.devices.config.DeviceIngestProperties;
 import io.storeyes.accesscontrol.devices.controllers.DeviceEventController;
 import io.storeyes.accesscontrol.devices.parsing.HikvisionEventParser;
 import io.storeyes.accesscontrol.devices.services.DeviceEventService;
+import io.storeyes.accesscontrol.logs.dto.NotificationBatch;
+import io.storeyes.accesscontrol.logs.entities.LogStatus;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
@@ -12,9 +14,14 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import tools.jackson.databind.ObjectMapper;
 
+import java.time.LocalTime;
+import java.util.List;
+import java.util.Optional;
+
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -157,5 +164,21 @@ class DeviceEventControllerTest {
                 .andExpect(jsonPath("$.status").value("ok"));
 
         verify(deviceEventService).ingest(any());
+    }
+
+    @Test
+    void returnsTheNotificationBatchSoTheProxyCanDispatchIt() throws Exception {
+        when(deviceEventService.ingest(any())).thenReturn(Optional.of(new NotificationBatch(
+                true, false, false, 1, 0, "1 late", List.of(new NotificationBatch.Item(
+                        "E001", "Alice", LogStatus.LATE, LocalTime.of(8, 0), LocalTime.of(8, 5), 5)))));
+
+        mockMvc.perform(post("/api/device-events")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(SUCCESS_EVENT))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("ok"))
+                .andExpect(jsonPath("$.notifications.send").value(true))
+                .andExpect(jsonPath("$.notifications.items[0].status").value("LATE"))
+                .andExpect(jsonPath("$.notifications.items[0].minutesLate").value(5));
     }
 }

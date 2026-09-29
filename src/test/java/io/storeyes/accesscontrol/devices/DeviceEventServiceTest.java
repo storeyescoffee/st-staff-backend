@@ -4,6 +4,9 @@ import io.storeyes.accesscontrol.devices.dto.HikvisionEvent;
 import io.storeyes.accesscontrol.devices.entities.DeviceEvent;
 import io.storeyes.accesscontrol.devices.repositories.DeviceEventRepository;
 import io.storeyes.accesscontrol.devices.services.DeviceEventService;
+import io.storeyes.accesscontrol.logs.dto.NotificationBatch;
+import io.storeyes.accesscontrol.logs.dto.PunchResponse;
+import io.storeyes.accesscontrol.logs.entities.LogStatus;
 import io.storeyes.accesscontrol.logs.services.EmployeeLogService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -15,6 +18,7 @@ import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -62,7 +66,7 @@ class DeviceEventServiceTest {
     void skipsAnEventAlreadyInTheLedger() {
         when(deviceEventRepository.existsBySourceKey("aa:bb:1001")).thenReturn(true);
 
-        service.ingest(event);
+        assertThat(service.ingest(event)).isEmpty();
 
         verify(employeeLogService, never()).processDeviceEvent(any(), any(), any(), any());
         verify(deviceEventRepository, never()).save(any());
@@ -77,5 +81,17 @@ class DeviceEventServiceTest {
         service.ingest(event);
 
         verify(deviceEventRepository).save(any(DeviceEvent.class));
+    }
+
+    @Test
+    void returnsTheNotificationBatchOfALateCheckIn() {
+        NotificationBatch batch = new NotificationBatch(true, false, false, 1, 0, "1 late", List.of(
+                new NotificationBatch.Item("E001", "Alice", LogStatus.LATE,
+                        LocalTime.of(8, 0), LocalTime.of(8, 5), 5)));
+        when(deviceEventRepository.existsBySourceKey("aa:bb:1001")).thenReturn(false);
+        when(employeeLogService.processDeviceEvent(any(), any(), any(), any()))
+                .thenReturn(new PunchResponse(List.of(), batch));
+
+        assertThat(service.ingest(event)).contains(batch);
     }
 }
