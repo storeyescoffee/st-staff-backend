@@ -578,7 +578,18 @@ public class EmployeeLogService {
             case MISSED_OUT -> AnomalyType.MISSING_OUT;
             default        -> null;
         };
-        if (type == null || anomalyRepository.existsByEmployeeLog(log)) return;
+        if (type == null) return;
+
+        Optional<Anomaly> existing = anomalyRepository.findByEmployeeLog(log);
+        if (existing.isPresent()) {
+            // An absent employee who finally checks in late: the absence becomes a lateness.
+            Anomaly anomaly = existing.get();
+            if (anomaly.getType() == AnomalyType.ABSENCE && type == AnomalyType.LATE) {
+                anomaly.setType(AnomalyType.LATE);
+                anomalyRepository.save(anomaly);
+            }
+            return;
+        }
         anomalyRepository.save(Anomaly.builder()
                 .employeeLog(log)
                 .type(type)

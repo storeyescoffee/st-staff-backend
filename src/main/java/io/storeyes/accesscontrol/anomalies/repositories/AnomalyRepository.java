@@ -13,5 +13,5 @@ public interface AnomalyRepository extends JpaRepository<Anomaly, UUID> {
 
     List<Anomaly> findByEmployeeLog_DateBetween(LocalDate from, LocalDate to);
 
-    boolean existsByEmployeeLog(io.storeyes.accesscontrol.logs.entities.EmployeeLog employeeLog);
+    java.util.Optional<Anomaly> findByEmployeeLog(io.storeyes.accesscontrol.logs.entities.EmployeeLog employeeLog);
 }

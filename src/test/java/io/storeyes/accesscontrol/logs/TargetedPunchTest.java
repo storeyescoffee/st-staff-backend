@@ -1,5 +1,7 @@
 package io.storeyes.accesscontrol.logs;
 
+import io.storeyes.accesscontrol.anomalies.entities.Anomaly;
+import io.storeyes.accesscontrol.anomalies.entities.AnomalyType;
 import io.storeyes.accesscontrol.anomalies.repositories.AnomalyRepository;
 import io.storeyes.accesscontrol.employees.entities.Employee;
 import io.storeyes.accesscontrol.employees.repositories.EmployeeRepository;
@@ -41,6 +43,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -422,6 +425,21 @@ class TargetedPunchTest {
         assertThat(logs.get(e.getId()).getLoggedIn()).isEqualTo(LocalTime.of(10, 5));
         assertThat(logs.get(e.getId()).getLoggedOut()).isNull();
         assertThat(response.logs()).extracting(EmployeeLogResponse::status).containsExactly(LogStatus.LATE);
+    }
+
+    @Test
+    void lateCheckInTurnsTheAbsenceAnomalyIntoALateOne() {
+        Employee e = employee("E13", morning);
+        existingLog(e, null, null, LogStatus.ABSENT);
+        Anomaly absence = Anomaly.builder()
+                .id(UUID.randomUUID()).employeeLog(logs.get(e.getId())).type(AnomalyType.ABSENCE).build();
+        when(anomalyRepository.findByEmployeeLog(logs.get(e.getId()))).thenReturn(Optional.of(absence));
+
+        service.processDeviceEvent(DATE, LocalTime.of(10, 5), "E13", null);
+
+        assertThat(absence.getType()).isEqualTo(AnomalyType.LATE);
+        verify(anomalyRepository).save(absence);
+        verify(anomalyRepository, times(1)).save(any());
     }
 
     @Test
