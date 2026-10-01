@@ -21,6 +21,11 @@ public class TenantFilter extends OncePerRequestFilter {
 
     /** Device push notifications carry no X-STORE-CODE; they are attributed to a configured tenant. */
     private static final String DEVICE_PATH_PREFIX = "/api/device-events";
+    /**
+     * Polled for every store by the proxy backend's scheduler: a store with no schema has no staff, so it
+     * answers 404 rather than creating an empty schema for each store on the platform.
+     */
+    private static final String LATE_ALERTS_PATH = "/api/employee-logs/late-alerts";
 
     private final SchemaService schemaService;
     private final DeviceIngestProperties deviceIngestProperties;
@@ -39,6 +44,10 @@ public class TenantFilter extends OncePerRequestFilter {
             schema = "public";
         }
         try {
+            if (request.getRequestURI().startsWith(LATE_ALERTS_PATH) && !schemaService.exists(schema)) {
+                response.sendError(HttpServletResponse.SC_NOT_FOUND, "No staff data for store " + schema);
+                return;
+            }
             schemaService.ensureSchema(schema);
             TenantContext.set(schema);
             chain.doFilter(request, response);

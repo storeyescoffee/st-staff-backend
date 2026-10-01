@@ -127,7 +127,7 @@ public class EmployeeLogService {
      * An employee auto-created from a punch for an unknown code carries the code as its name, since a
      * punch carries no name. Those placeholders stay out of the attendance list until someone names them.
      */
-    private boolean isUnnamed(Employee emp) {
+    boolean isUnnamed(Employee emp) {
         String name = emp.getName();
         String code = emp.getCode();
         if (name == null || code == null) return false;
@@ -483,7 +483,7 @@ public class EmployeeLogService {
      * late/absence gate which statuses qualify, dnd suppresses (to defer) during the night
      * window, and group signals one summary instead of one notification per employee.
      */
-    private NotificationBatch buildNotifications(LocalTime checkTime, List<EmployeeLogResponse> results) {
+    NotificationBatch buildNotifications(LocalTime checkTime, List<EmployeeLogResponse> results) {
         Map<String, Boolean> rules = notificationRuleService.findAll().stream()
                 .collect(Collectors.toMap(NotificationRuleResponse::id, NotificationRuleResponse::enabled));
         boolean lateOn = rules.getOrDefault("late", false);
@@ -600,7 +600,7 @@ public class EmployeeLogService {
 
 
     /** Returns the scheduled WorkMode (possibly null for rest day) per employee for the given date. */
-    private Map<UUID, WorkMode> resolveScheduledWorkModes(LocalDate date) {
+    Map<UUID, WorkMode> resolveScheduledWorkModes(LocalDate date) {
         List<Schedule> schedules = scheduleRepository
                 .findByStartDateLessThanEqualAndEndDateGreaterThanEqual(date, date);
 

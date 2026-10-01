@@ -40,6 +40,18 @@ public class SchemaService {
         }
     }
 
+    /** Whether the store's schema already exists; never creates it. */
+    public boolean exists(String schema) {
+        if ("public".equals(schema) || knownSchemas.contains(schema)) return true;
+        if (!VALID_SCHEMA.matcher(schema).matches()) return false;
+        try (Connection conn = dataSource.getConnection();
+             ResultSet rs = conn.getMetaData().getSchemas(null, schema)) {
+            return rs.next();
+        } catch (SQLException e) {
+            throw new RuntimeException("Failed to look up schema: " + schema, e);
+        }
+    }
+
     private void createAndMigrate(String schema) {
         boolean schemaExisted;
         try (Connection conn = dataSource.getConnection()) {
