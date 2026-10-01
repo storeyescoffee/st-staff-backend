@@ -19,6 +19,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -30,7 +31,12 @@ import java.util.stream.Collectors;
  * <p>An employee is due once their shift's lateness cutoff ({@code start + tolerantLate}) is between 30
  * and 60 minutes old: {@code cutoff + 30 <= now < cutoff + 60}. A half-hourly caller therefore lands in
  * that window exactly once per shift. Due employees who checked in LATE, or who have not checked in at
- * all (reported as ABSENT), are alerted; PRESENT ones are not.
+ * all, are alerted; PRESENT ones are not.
+ *
+ * <p>This is an IN-side check only. A due employee with no log yet is marked ABSENT in
+ * {@code employee_logs} (and the marks are audited as an {@code IN} batch in the punch history), whatever
+ * the notification rules say; a later check-in still overwrites that absence. Check-out and MISSED_OUT
+ * are never touched here.
  *
  * <p>Each alert is claimed in {@code shift_alerts} before it is returned, so a re-run, a delayed tick or
  * a second backend instance never alerts the same employee's shift twice.
@@ -57,16 +63,14 @@ public class LateAlertService {
         boolean absenceOn = rules.getOrDefault("absence", false);
 
         List<EmployeeLogResponse> alerted = new ArrayList<>();
-        if (lateOn || absenceOn) {
-            // Yesterday too: a late-evening shift's window can run past midnight.
-            for (LocalDate date : List.of(now.toLocalDate().minusDays(1), now.toLocalDate())) {
-                for (Due due : dueOn(date, now)) {
-                    LogStatus status = due.log().status();
-                    boolean wanted = (status == LogStatus.LATE && lateOn) || (status == LogStatus.ABSENT && absenceOn);
-                    if (wanted && shiftAlertRepository.claim(
-                            date, due.log().employee().id(), due.workModeId(), status.name()) == 1) {
-                        alerted.add(due.log());
-                    }
+        // Yesterday too: a late-evening shift's window can run past midnight.
+        for (LocalDate date : List.of(now.toLocalDate().minusDays(1), now.toLocalDate())) {
+            for (Due due : dueOn(date, now)) {
+                LogStatus status = due.log().status();
+                boolean wanted = (status == LogStatus.LATE && lateOn) || (status == LogStatus.ABSENT && absenceOn);
+                if (wanted && shiftAlertRepository.claim(
+                        date, due.log().employee().id(), due.workModeId(), status.name()) == 1) {
+                    alerted.add(due.log());
                 }
             }
         }
@@ -81,7 +85,10 @@ public class LateAlertService {
     /** An alertable employee and the scheduled shift the alert is for (the log's own may be unset). */
     private record Due(EmployeeLogResponse log, UUID workModeId) {}
 
-    /** Employees scheduled on {@code date} whose shift is in the alert window at {@code now} and not PRESENT. */
+    /**
+     * Employees scheduled on {@code date} whose shift is in the alert window at {@code now} and not PRESENT.
+     * Those with no log yet are marked ABSENT on the way.
+     */
     private List<Due> dueOn(LocalDate date, LocalDateTime now) {
         Map<UUID, WorkMode> scheduled = employeeLogService.resolveScheduledWorkModes(date);
         if (scheduled.isEmpty()) return List.of();
@@ -90,6 +97,7 @@ public class LateAlertService {
                 .collect(Collectors.toMap(l -> l.getEmployee().getId(), l -> l));
 
         List<Due> due = new ArrayList<>();
+        Map<WorkMode, List<EmployeeLogResponse>> marked = new LinkedHashMap<>();
         for (Employee emp : employeeRepository.findAllByDeletedFalse()) {
             WorkMode wm = scheduled.get(emp.getId());
             if (wm == null || !wm.isFollowedUp() || wm.getStartTime() == null) continue;
@@ -102,14 +110,16 @@ public class LateAlertService {
             if (!inWindow) continue;
 
             EmployeeLog log = logsByEmployee.get(emp.getId());
-            if (log != null && log.getLoggedIn() != null) {
-                if (log.getStatus() == LogStatus.LATE) due.add(new Due(EmployeeLogResponse.from(log), wm.getId()));
-            } else {
-                EmployeeLogResponse stub = EmployeeLogResponse.stub(date, emp, wm);
-                due.add(new Due(new EmployeeLogResponse(stub.id(), stub.date(), stub.employee(), stub.workMode(),
-                        null, null, LogStatus.ABSENT, null), wm.getId()));
+            if (log == null) {
+                log = employeeLogService.markAbsent(date, emp, wm);
+                if (log == null) continue;
+                marked.computeIfAbsent(wm, k -> new ArrayList<>()).add(EmployeeLogResponse.from(log));
+            }
+            if (log.getStatus() == LogStatus.LATE || log.getStatus() == LogStatus.ABSENT) {
+                due.add(new Due(EmployeeLogResponse.from(log), wm.getId()));
             }
         }
+        marked.forEach((shift, absences) -> employeeLogService.recordAbsences(date, shift, absences));
         return due;
     }
 }

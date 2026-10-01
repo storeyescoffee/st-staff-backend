@@ -208,10 +208,15 @@ public class EmployeeLogService {
             saved = employeeLogRepository.save(applyInPunch(date, employee, wm, time));
             createAnomalyIfNeeded(saved);
             method = PunchMethod.IN;
+        } else if (existing.get().getLoggedIn() == null) {
+            // Already marked ABSENT (no check-in yet): arriving late overwrites that absence.
+            saved = employeeLogRepository.save(checkInOverAbsence(existing.get(), existing.get().getWorkMode(), time));
+            createAnomalyIfNeeded(saved);
+            method = PunchMethod.IN;
         } else {
             EmployeeLog log = existing.get();
-            // Nothing to do: no open check-in, the day is already closed, or the event echoes the check-in.
-            if (log.getLoggedIn() == null || log.getLoggedOut() != null || time.equals(log.getLoggedIn())) {
+            // Nothing to do: the day is already closed, or the event echoes the check-in.
+            if (log.getLoggedOut() != null || time.equals(log.getLoggedIn())) {
                 return new PunchResponse(List.of(), null);
             }
             long minutes = ChronoUnit.MINUTES.between(log.getLoggedIn(), time);
@@ -324,10 +329,7 @@ public class EmployeeLogService {
 
             if (existing.isEmpty()) return applyInPunch(date, emp, shift, x);
 
-            EmployeeLog log = existing.get();
-            log.setLoggedIn(x);
-            log.setStatus(statusForIn(shift, x));
-            return log;
+            return checkInOverAbsence(existing.get(), shift, x);
         }
 
         // No punch: absent, unless they already have a log (from this or an earlier check).
@@ -419,7 +421,12 @@ public class EmployeeLogService {
 
             if (existing.isPresent()) {
                 EmployeeLog log = existing.get();
-                if (log.getLoggedIn() != null && log.getLoggedOut() == null) {
+                if (log.getLoggedIn() == null) {
+                    // Already marked ABSENT (no check-in yet): arriving late overwrites that absence.
+                    EmployeeLog saved = employeeLogRepository.save(checkInOverAbsence(log, log.getWorkMode(), x));
+                    createAnomalyIfNeeded(saved);
+                    results.add(EmployeeLogResponse.from(saved));
+                } else if (log.getLoggedOut() == null) {
                     long minutes = ChronoUnit.MINUTES.between(log.getLoggedIn(), x);
                     if (minutes < 0) minutes += 24 * 60; // overnight shift
                     log.setLoggedOut(x);
@@ -577,6 +584,41 @@ public class EmployeeLogService {
                 .type(type)
                 .isHandled(false)
                 .build());
+    }
+
+    /**
+     * IN check from the half-hourly scheduler for an employee who has no log for {@code date} on their
+     * followed-up {@code shift}: records them ABSENT. Only the IN direction is decided here — check-out
+     * and MISSED_OUT are left to the OUT checks. Returns the saved log, or null when there was nothing
+     * to mark (untracked shift, or a log already exists).
+     */
+    @Transactional
+    public EmployeeLog markAbsent(LocalDate date, Employee emp, WorkMode shift) {
+        if (shift == null || !shift.isFollowedUp()) return null;
+        if (employeeLogRepository.findByDateAndEmployee_Id(date, emp.getId()).isPresent()) return null;
+
+        EmployeeLog saved = employeeLogRepository.save(EmployeeLog.builder()
+                .date(date)
+                .employee(emp)
+                .workMode(shift)
+                .status(LogStatus.ABSENT)
+                .build());
+        createAnomalyIfNeeded(saved);
+        return saved;
+    }
+
+    /** Audits the scheduler's ABSENT marks for one shift as an {@code IN} batch in the punch history. */
+    public void recordAbsences(LocalDate date, WorkMode shift, List<EmployeeLogResponse> absences) {
+        if (absences.isEmpty()) return;
+        saveHistory(date, new PunchTarget(shift.getId(), PunchMethod.IN), shift,
+                new PunchResponse(absences, null));
+    }
+
+    /** Checks in a log that has none yet (an ABSENT one), deciding PRESENT / LATE against {@code wm}. */
+    private EmployeeLog checkInOverAbsence(EmployeeLog log, WorkMode wm, LocalTime x) {
+        log.setLoggedIn(x);
+        log.setStatus(statusForIn(wm, x));
+        return log;
     }
 
     private EmployeeLog applyInPunch(LocalDate date, Employee employee, WorkMode wm, LocalTime x) {

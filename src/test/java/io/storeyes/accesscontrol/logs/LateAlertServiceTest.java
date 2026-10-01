@@ -5,6 +5,7 @@ import io.storeyes.accesscontrol.employees.entities.Employee;
 import io.storeyes.accesscontrol.employees.repositories.EmployeeRepository;
 import io.storeyes.accesscontrol.logs.dto.EmployeeLogResponse;
 import io.storeyes.accesscontrol.logs.dto.LateAlertResponse;
+import io.storeyes.accesscontrol.logs.dto.PunchMethod;
 import io.storeyes.accesscontrol.logs.entities.EmployeeLog;
 import io.storeyes.accesscontrol.logs.entities.LogStatus;
 import io.storeyes.accesscontrol.logs.repositories.EmployeeLogRepository;
@@ -33,12 +34,16 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -57,6 +62,7 @@ class LateAlertServiceTest {
             .build();
 
     private NotificationRuleService notificationRuleService;
+    private EmployeeLogsHistoryRepository employeeLogsHistoryRepository;
     private LateAlertService service;
 
     private final List<Employee> roster = new ArrayList<>();
@@ -73,11 +79,12 @@ class LateAlertServiceTest {
         ScheduleDetailRepository scheduleDetailRepository = Mockito.mock(ScheduleDetailRepository.class);
         ShiftAlertRepository shiftAlertRepository = Mockito.mock(ShiftAlertRepository.class);
         notificationRuleService = Mockito.mock(NotificationRuleService.class);
+        employeeLogsHistoryRepository = Mockito.mock(EmployeeLogsHistoryRepository.class);
 
         EmployeeLogService employeeLogService = new EmployeeLogService(
                 employeeLogRepository, employeeRepository, scheduleRepository, scheduleDetailRepository,
                 Mockito.mock(AnomalyRepository.class), notificationRuleService,
-                Mockito.mock(WorkModeRepository.class), Mockito.mock(EmployeeLogsHistoryRepository.class),
+                Mockito.mock(WorkModeRepository.class), employeeLogsHistoryRepository,
                 new ObjectMapper());
         service = new LateAlertService(employeeLogService, employeeLogRepository, employeeRepository,
                 shiftAlertRepository, notificationRuleService);
@@ -98,6 +105,14 @@ class LateAlertServiceTest {
                                 .build())
                         .toList());
         when(employeeLogRepository.findByDate(DATE)).thenAnswer(inv -> new ArrayList<>(logs.values()));
+        when(employeeLogRepository.findByDateAndEmployee_Id(any(), any()))
+                .thenAnswer(inv -> Optional.ofNullable(logs.get(inv.<UUID>getArgument(1))));
+        when(employeeLogRepository.save(any())).thenAnswer(inv -> {
+            EmployeeLog log = inv.getArgument(0);
+            if (log.getId() == null) log.setId(UUID.randomUUID());
+            logs.put(log.getEmployee().getId(), log);
+            return log;
+        });
 
         when(shiftAlertRepository.claim(any(), any(), any(), anyString()))
                 .thenAnswer(inv -> claimed.add(List.of(inv.getArgument(0), inv.getArgument(1), inv.getArgument(2))) ? 1 : 0);
@@ -200,5 +215,59 @@ class LateAlertServiceTest {
         assertThat(row.date()).isEqualTo(DATE);
         assertThat(row.workMode().startTime()).isEqualTo(LocalTime.of(9, 0));
         assertThat(row.loggedIn()).isNull();
+    }
+
+    @Test
+    void noShowIsPersistedAbsentOnTheirShift() {
+        Employee e = employee("NOSHOW");
+
+        runAt(10, 0);
+
+        EmployeeLog log = logs.get(e.getId());
+        assertThat(log).isNotNull();
+        assertThat(log.getStatus()).isEqualTo(LogStatus.ABSENT);
+        assertThat(log.getWorkMode()).isEqualTo(morning);
+        assertThat(log.getLoggedIn()).isNull();
+        assertThat(log.getLoggedOut()).isNull();
+        verify(employeeLogsHistoryRepository, times(1)).save(
+                Mockito.argThat(h -> h.getMethod() == PunchMethod.IN && "Morning".equals(h.getShiftName())));
+    }
+
+    @Test
+    void absenceIsMarkedOnceAndOnlyInsideTheWindow() {
+        Employee e = employee("NOSHOW");
+
+        runAt(9, 44);
+        assertThat(logs).doesNotContainKey(e.getId());
+
+        runAt(9, 50);
+        EmployeeLog first = logs.get(e.getId());
+        runAt(10, 10);
+
+        assertThat(logs.get(e.getId())).isSameAs(first);
+        verify(employeeLogsHistoryRepository, times(1)).save(any());
+    }
+
+    @Test
+    void absenceIsMarkedEvenWhenNotificationRulesAreOff() {
+        Employee e = employee("NOSHOW");
+        rules(false, false);
+
+        assertThat(runAt(10, 0).logs()).isEmpty();
+        assertThat(logs.get(e.getId()).getStatus()).isEqualTo(LogStatus.ABSENT);
+    }
+
+    @Test
+    void neverTouchesCheckedInOrClosedLogs() {
+        Employee late = employee("LATE");
+        checkedIn(late, LocalTime.of(9, 30), LogStatus.LATE);
+        Employee missed = employee("MISSED");
+        checkedIn(missed, LocalTime.of(9, 0), LogStatus.MISSED_OUT);
+
+        runAt(10, 0);
+
+        assertThat(logs.get(late.getId()).getStatus()).isEqualTo(LogStatus.LATE);
+        assertThat(logs.get(missed.getId()).getStatus()).isEqualTo(LogStatus.MISSED_OUT);
+        verify(employeeLogsHistoryRepository, never()).save(any());
     }
 }

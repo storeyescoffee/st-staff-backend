@@ -410,4 +410,29 @@ class TargetedPunchTest {
         assertThat(response.notifications().send()).isFalse();
         assertThat(response.notifications().items()).isEmpty();
     }
+
+    @Test
+    void deviceEventChecksInAnEmployeeAlreadyMarkedAbsent() {
+        Employee e = employee("E11", morning);
+        existingLog(e, null, null, LogStatus.ABSENT); // the half-hourly IN check marked them absent
+
+        PunchResponse response = service.processDeviceEvent(DATE, LocalTime.of(10, 5), "E11", null);
+
+        assertThat(statusOf(e)).isEqualTo(LogStatus.LATE);
+        assertThat(logs.get(e.getId()).getLoggedIn()).isEqualTo(LocalTime.of(10, 5));
+        assertThat(logs.get(e.getId()).getLoggedOut()).isNull();
+        assertThat(response.logs()).extracting(EmployeeLogResponse::status).containsExactly(LogStatus.LATE);
+    }
+
+    @Test
+    void legacyBatchChecksInAnEmployeeAlreadyMarkedAbsent() {
+        Employee e = employee("E12", morning);
+        existingLog(e, null, null, LogStatus.ABSENT);
+
+        service.processPunches(DATE, CHECK_TIME, null, List.of(),
+                List.of(new PunchEntry("E12", LocalTime.of(10, 5))));
+
+        assertThat(statusOf(e)).isEqualTo(LogStatus.LATE);
+        assertThat(logs.get(e.getId()).getLoggedIn()).isEqualTo(LocalTime.of(10, 5));
+    }
 }
