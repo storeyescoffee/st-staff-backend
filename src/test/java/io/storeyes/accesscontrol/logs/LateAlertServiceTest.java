@@ -174,6 +174,19 @@ class LateAlertServiceTest {
     }
 
     @Test
+    void earlyShiftIsAlertedAnHourAfterItsStartNotAtIt() {
+        Employee e = employee("EARLY");
+        scheduled.put(e.getId(), WorkMode.builder().id(UUID.randomUUID()).name("Early")
+                .startTime(LocalTime.of(6, 30)).endTime(LocalTime.of(14, 0))
+                .tolerantLate(30).followedUp(true).build());
+
+        assertThat(runAt(6, 30).logs()).isEmpty();
+        assertThat(runAt(7, 0).logs()).isEmpty();
+        assertThat(logs).doesNotContainKey(e.getId());
+        assertThat(codes(runAt(7, 30))).containsExactly("EARLY:ABSENT");
+    }
+
+    @Test
     void sameShiftIsAlertedOnlyOnce() {
         employee("NOSHOW");
 
