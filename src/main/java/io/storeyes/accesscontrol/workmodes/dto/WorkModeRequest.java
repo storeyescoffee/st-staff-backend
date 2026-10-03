@@ -14,5 +14,6 @@ public record WorkModeRequest(
         LocalTime endTime,
         Integer tolerantLate,
         Integer tolerantOut,
+        Integer timeToNotify,
         Boolean isFollowedUp) {
 }

@@ -13,6 +13,7 @@ public record WorkModeResponse(
         LocalTime endTime,
         Integer tolerantLate,
         Integer tolerantOut,
+        Integer timeToNotify,
         boolean isFollowedUp,
         int assignedEmployee) {
 
@@ -25,6 +26,7 @@ public record WorkModeResponse(
                 m.getEndTime(),
                 m.getTolerantLate(),
                 m.getTolerantOut(),
+                m.getTimeToNotify(),
                 m.isFollowedUp(),
                 m.getAssignedEmployee());
     }

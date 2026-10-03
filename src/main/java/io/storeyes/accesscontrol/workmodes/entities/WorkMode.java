@@ -52,6 +52,10 @@ public class WorkMode {
     @Column(name = "tolerant_out")
     private Integer tolerantOut;
 
+    /** Minutes after which a late/absent employee triggers a notification; one of 15, 30, 45, 60; null when unset. */
+    @Column(name = "time_to_notify")
+    private Integer timeToNotify;
+
     @Column(name = "followed_up", nullable = false)
     private boolean followedUp;
 
