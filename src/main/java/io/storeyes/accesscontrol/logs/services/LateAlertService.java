@@ -26,11 +26,11 @@ import java.util.UUID;
 import java.util.stream.Collectors;
 
 /**
- * Half-hourly late-arrival check, driven by the proxy backend's scheduler for each store.
+ * Quarter-hourly late-arrival check, driven by the proxy backend's scheduler for each store.
  *
- * <p>An employee is due once their shift's lateness cutoff ({@code start + tolerantLate}) is between 30
- * and 60 minutes old: {@code cutoff + 30 <= now < cutoff + 60}. A half-hourly caller therefore lands in
- * that window exactly once per shift. Due employees who checked in LATE, or who have not checked in at
+ * <p>An employee is due while {@code A <= now < A + 15 min}, where {@code A = shift start + timeToNotify}
+ * (the work mode's "time to notify"; modes without one are never alerted). A quarter-hourly caller
+ * therefore lands in that window exactly once per shift. Due employees who checked in LATE, or who have not checked in at
  * all, are alerted; PRESENT ones are not.
  *
  * <p>This is an IN-side check only. A due employee with no log yet is marked ABSENT in
@@ -46,8 +46,7 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class LateAlertService {
 
-    private static final int WINDOW_START_MINUTES = 30;
-    private static final int WINDOW_END_MINUTES = 60;
+    private static final int WINDOW_MINUTES = 15;
 
     private final EmployeeLogService employeeLogService;
     private final EmployeeLogRepository employeeLogRepository;
@@ -100,13 +99,11 @@ public class LateAlertService {
         Map<WorkMode, List<EmployeeLogResponse>> marked = new LinkedHashMap<>();
         for (Employee emp : employeeRepository.findAllByDeletedFalse()) {
             WorkMode wm = scheduled.get(emp.getId());
-            if (wm == null || !wm.isFollowedUp() || wm.getStartTime() == null) continue;
+            if (wm == null || !wm.isFollowedUp() || wm.getStartTime() == null || wm.getTimeToNotify() == null) continue;
             if (employeeLogService.isUnnamed(emp)) continue;
 
-            int tolerance = wm.getTolerantLate() != null ? wm.getTolerantLate() : 0;
-            LocalDateTime cutoff = date.atTime(wm.getStartTime()).plusMinutes(tolerance);
-            boolean inWindow = !now.isBefore(cutoff.plusMinutes(WINDOW_START_MINUTES))
-                    && now.isBefore(cutoff.plusMinutes(WINDOW_END_MINUTES));
+            LocalDateTime notifyAt = date.atTime(wm.getStartTime()).plusMinutes(wm.getTimeToNotify());
+            boolean inWindow = !now.isBefore(notifyAt) && now.isBefore(notifyAt.plusMinutes(WINDOW_MINUTES));
             if (!inWindow) continue;
 
             EmployeeLog log = logsByEmployee.get(emp.getId());

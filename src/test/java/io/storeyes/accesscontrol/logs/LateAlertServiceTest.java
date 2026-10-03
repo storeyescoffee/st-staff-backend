@@ -47,18 +47,18 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * Half-hourly late-arrival alerts: a shift is due while {@code start + tolerance + 30 <= now < start +
- * tolerance + 60}, and each employee's shift is alerted at most once.
+ * Quarter-hourly late-arrival alerts: a shift is due while {@code A <= now < A + 15} with {@code A = start +
+ * timeToNotify}, and each employee's shift is alerted at most once.
  */
 class LateAlertServiceTest {
 
     private static final LocalDate DATE = LocalDate.of(2026, 7, 12);
 
-    /** 09:00 start, 15 min tolerance → cutoff 09:15, alert window [09:45, 10:15). */
+    /** 09:00 start, notify after 30 min → alert window [09:30, 09:45). */
     private final WorkMode morning = WorkMode.builder()
             .id(UUID.randomUUID()).name("Morning")
             .startTime(LocalTime.of(9, 0)).endTime(LocalTime.of(17, 0))
-            .tolerantLate(15).followedUp(true)
+            .tolerantLate(15).timeToNotify(30).followedUp(true)
             .build();
 
     private NotificationRuleService notificationRuleService;
@@ -152,7 +152,7 @@ class LateAlertServiceTest {
         checkedIn(employee("ONTIME"), LocalTime.of(8, 55), LogStatus.PRESENT);
         employee("NOSHOW");
 
-        LateAlertResponse r = runAt(10, 0);
+        LateAlertResponse r = runAt(9, 30);
 
         assertThat(codes(r)).containsExactlyInAnyOrder("LATE:LATE", "NOSHOW:ABSENT");
         assertThat(r.notifications().send()).isTrue();
@@ -165,33 +165,33 @@ class LateAlertServiceTest {
     }
 
     @Test
-    void windowIsCutoffPlus30InclusiveToCutoffPlus60Exclusive() {
+    void windowIsStartPlusTimeToNotifyInclusiveFor15MinutesExclusive() {
         employee("NOSHOW");
 
-        assertThat(runAt(9, 44).logs()).isEmpty();
-        assertThat(runAt(10, 15).logs()).isEmpty();
-        assertThat(codes(runAt(9, 45))).containsExactly("NOSHOW:ABSENT");
+        assertThat(runAt(9, 29).logs()).isEmpty();
+        assertThat(runAt(9, 45).logs()).isEmpty();
+        assertThat(codes(runAt(9, 30))).containsExactly("NOSHOW:ABSENT");
     }
 
     @Test
-    void earlyShiftIsAlertedAnHourAfterItsStartNotAtIt() {
+    void earlyShiftIsAlertedTimeToNotifyAfterItsStartNotAtIt() {
         Employee e = employee("EARLY");
         scheduled.put(e.getId(), WorkMode.builder().id(UUID.randomUUID()).name("Early")
                 .startTime(LocalTime.of(6, 30)).endTime(LocalTime.of(14, 0))
-                .tolerantLate(30).followedUp(true).build());
+                .tolerantLate(30).timeToNotify(30).followedUp(true).build());
 
         assertThat(runAt(6, 30).logs()).isEmpty();
-        assertThat(runAt(7, 0).logs()).isEmpty();
+        assertThat(runAt(6, 59).logs()).isEmpty();
         assertThat(logs).doesNotContainKey(e.getId());
-        assertThat(codes(runAt(7, 30))).containsExactly("EARLY:ABSENT");
+        assertThat(codes(runAt(7, 0))).containsExactly("EARLY:ABSENT");
     }
 
     @Test
     void sameShiftIsAlertedOnlyOnce() {
         employee("NOSHOW");
 
-        assertThat(runAt(9, 50).logs()).hasSize(1);
-        LateAlertResponse again = runAt(10, 0);
+        assertThat(runAt(9, 35).logs()).hasSize(1);
+        LateAlertResponse again = runAt(9, 30);
 
         assertThat(again.logs()).isEmpty();
         assertThat(again.notifications().send()).isFalse();
@@ -203,11 +203,21 @@ class LateAlertServiceTest {
         employee("NOSHOW");
         rules(true, false);
 
-        assertThat(codes(runAt(10, 0))).containsExactly("LATE:LATE");
+        assertThat(codes(runAt(9, 30))).containsExactly("LATE:LATE");
 
         // Turning absence on later in the same window still alerts the no-show: it was never claimed.
         rules(true, true);
-        assertThat(codes(runAt(10, 5))).containsExactly("NOSHOW:ABSENT");
+        assertThat(codes(runAt(9, 40))).containsExactly("NOSHOW:ABSENT");
+    }
+
+    @Test
+    void modeWithoutTimeToNotifyIsIgnored() {
+        Employee e = employee("NONOTIFY");
+        scheduled.put(e.getId(), WorkMode.builder().id(UUID.randomUUID()).name("None")
+                .startTime(LocalTime.of(9, 0)).followedUp(true).build());
+
+        assertThat(runAt(9, 30).logs()).isEmpty();
+        assertThat(logs).doesNotContainKey(e.getId());
     }
 
     @Test
@@ -216,14 +226,14 @@ class LateAlertServiceTest {
         scheduled.put(e.getId(), WorkMode.builder().id(UUID.randomUUID()).name("Free")
                 .startTime(LocalTime.of(9, 0)).tolerantLate(15).followedUp(false).build());
 
-        assertThat(runAt(10, 0).logs()).isEmpty();
+        assertThat(runAt(9, 30).logs()).isEmpty();
     }
 
     @Test
     void responseLogsAreAttendanceRows() {
         employee("NOSHOW");
 
-        EmployeeLogResponse row = runAt(10, 0).logs().getFirst();
+        EmployeeLogResponse row = runAt(9, 30).logs().getFirst();
 
         assertThat(row.date()).isEqualTo(DATE);
         assertThat(row.workMode().startTime()).isEqualTo(LocalTime.of(9, 0));
@@ -234,7 +244,7 @@ class LateAlertServiceTest {
     void noShowIsPersistedAbsentOnTheirShift() {
         Employee e = employee("NOSHOW");
 
-        runAt(10, 0);
+        runAt(9, 30);
 
         EmployeeLog log = logs.get(e.getId());
         assertThat(log).isNotNull();
@@ -250,12 +260,12 @@ class LateAlertServiceTest {
     void absenceIsMarkedOnceAndOnlyInsideTheWindow() {
         Employee e = employee("NOSHOW");
 
-        runAt(9, 44);
+        runAt(9, 29);
         assertThat(logs).doesNotContainKey(e.getId());
 
-        runAt(9, 50);
+        runAt(9, 35);
         EmployeeLog first = logs.get(e.getId());
-        runAt(10, 10);
+        runAt(9, 44);
 
         assertThat(logs.get(e.getId())).isSameAs(first);
         verify(employeeLogsHistoryRepository, times(1)).save(any());
@@ -266,7 +276,7 @@ class LateAlertServiceTest {
         Employee e = employee("NOSHOW");
         rules(false, false);
 
-        assertThat(runAt(10, 0).logs()).isEmpty();
+        assertThat(runAt(9, 30).logs()).isEmpty();
         assertThat(logs.get(e.getId()).getStatus()).isEqualTo(LogStatus.ABSENT);
     }
 
@@ -277,7 +287,7 @@ class LateAlertServiceTest {
         Employee missed = employee("MISSED");
         checkedIn(missed, LocalTime.of(9, 0), LogStatus.MISSED_OUT);
 
-        runAt(10, 0);
+        runAt(9, 30);
 
         assertThat(logs.get(late.getId()).getStatus()).isEqualTo(LogStatus.LATE);
         assertThat(logs.get(missed.getId()).getStatus()).isEqualTo(LogStatus.MISSED_OUT);
